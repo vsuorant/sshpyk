@@ -8,6 +8,8 @@ from os.path import isfile, join
 from argparse import ArgumentParser, SUPPRESS
 from subprocess import run, PIPE
 
+from . import version
+
 # No tabs, no multiline, quote { and } !
 KERNEL_SCRIPT = """
 import os
@@ -60,6 +62,8 @@ if __name__ == "__main__":
 
     ### prevents --help from appearing in it's own "options:" group
     optional.add_argument( "--help", "-h", action="help", default=SUPPRESS, help="show this help message and exit" )
+    optional.add_argument( "--version", action='version', version=f'''sshrpy {version( )}''' )
+
     optional.add_argument( "--timeout", "-t", type=int, help="timeout for remote commands", default=5 )
     optional.add_argument( "--name", "-n", type=str, help="kernel name" )
     optional.add_argument( "--env", "-e", nargs="*",

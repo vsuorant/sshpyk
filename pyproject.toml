@@ -1,0 +1,24 @@
+[project]
+name = "sshpyk"
+dynamic = ["version"]
+description = "remote jupyter kernels via ssh tunnels"
+authors = [
+    {name = "Darrell Schiebel", email = "darrell@schiebel.us"},
+]
+
+dependencies = [ "jupyter-client" ]
+requires-python = ">=3.8"
+readme = "README.rst"
+license = {text = "BSD-3-Clause"}
+
+[tool]
+[tool.pdm]
+[tool.pdm.build]
+[tool.pdm.version]
+source = "scm"
+write_to = "sshpyk/__version__.py"
+write_template = "__version__ = '{}'"  # optional, default to "{}"
+
+[build-system]
+requires = ["pdm-pep517>=0.12.0"]
+build-backend = "pdm.pep517.api"

@@ -8,6 +8,15 @@ import sys
 import re
 import os
 
+try:
+    from .__version__ import __version__
+    _VERSION = __version__
+except:
+    _VERSION = '0.0'
+
+def version( ):
+    return _VERSION
+
 def add_kernel( host, display_name, remote_python_path, local_python_path=sys.executable,
                 env=[], sudo=False, system=False, timeout=5 ):
     '''
