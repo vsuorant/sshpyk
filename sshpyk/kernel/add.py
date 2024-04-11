@@ -21,7 +21,7 @@ if __name__ == "__main__":
 
     required = parse.add_argument_group("required arguments")
     required.add_argument( "--host", "-H", required=True, help="name of remote host (as used to connect with ssh)" )
-    required.add_argument( "--python", "-p", required=True, help='path to remote python installation ("PATH/bin/python3" would be the python executable)' )
+    required.add_argument( "--python", "-p", required=True, help='path to remote python installation ("PATH/bin/python" would be the python executable)' )
 
     args = parse.parse_args( )
     if args.display_name is None:
