@@ -121,6 +121,8 @@ Command line "add" options
 optional arguments
 ------------------
 
+*this is here only because PyPI requires it to be here to accept this RST file*
+
 --help, -h
 ^^^^^^^^^^
 
@@ -152,6 +154,8 @@ optional arguments
 
 required arguments
 ------------------
+
+*this is here only because PyPI requires it to be here to accept this RST file*
 
 --host HOST, -H HOST
 ^^^^^^^^^^^^^^^^^^^^
