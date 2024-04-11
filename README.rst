@@ -61,4 +61,4 @@ The following options are available for listing the Jupyter kernel specification
 .. option::   --no-check, -nc
 
               Do not check for the existence local or remote Python executables. This option
-              can be used alone or with other options, e.g. with -l.
+              can be used alone or with other options, e.g. with :code:`-l`.
