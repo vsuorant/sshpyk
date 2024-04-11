@@ -38,19 +38,20 @@ specifications rather than just the ones for `SSH Kernel <https://github.com/ber
 
 
 Command line "ls" options
-=========================
+-------------------------
 
 The following options are available for listing the Jupyter kernel specifications:
 
-.. option::   --help, -h
+.. option::   **--help, -h**
 
               Show this help message and exit.
 
-.. option::   --all, -a
+.. option::   **--all, -a**
 
-              List all kernels that are available rather than just ssh_ipykernel and sshpyk kernels.
+              List all kernels that are available rather than just
+              `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ and sshpyk kernels.
 
-.. option::   --local, -l
+.. option::   **--local, -l**
 
               Only list the information for the local Python executable.
 
