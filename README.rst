@@ -1,6 +1,5 @@
-======================================
 Remote Jupyter Kernels via SSH tunnels
-======================================
+######################################
 
 The design of this pakage is based upon `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ which is
 in turn based upon `remote_ikernel <https://bitbucket.org/tdaff/remote_ikernel>`_. This implementation shares
@@ -14,9 +13,8 @@ also modest subtractions. There are fewer configuration options for things like 
 kernel. This is still based on the kernel description that the user sees, but the entire name
 is no longer completely configurable.
 
------------------------------------------------
 Listing the Jupyter Kernels that are available
------------------------------------------------
+**********************************************
 
 It can be difficult to know which Jupyter Kernels are available because there is more than one location that
 the `Kernel Spec files <https://jupyter-client.readthedocs.io/en/latest/kernels.html#kernel-specs>`_ can be
@@ -79,9 +77,8 @@ The following options are available for listing the Jupyter kernel specification
               avoids colorization to indicate problems so it can be useful for scripting.
 
 
----------------------------------------
 Adding a new Kernel for a Remote System
----------------------------------------
+***************************************
 
 :code:`sshpyk` can also be used to add a specification file for a remote Python Kernel. For a
 remote kernel to work
@@ -168,9 +165,8 @@ required arguments
              installation so the Python executable would be found in :code:`<PATH>/bin/python`.
 
 
------------------------
 SSH configuration notes
------------------------
+=======================
 
 The host name used above is *different* from the Internet Protocol name for hosts which have
 a well defined address. It is also a name apart from the physical network where the host can
