@@ -109,7 +109,7 @@ instead of showing the kernel specificaton directory. Since we again asked that 
 be displayed instead of only the SSH kernels, a Python path is displayed for the
 non-SSH kernels, but it is the local Python path as indicated by :code:`localhost:`.
 Because these three kernels are non-SSH kernels this is the only Python path that is
-available. However for the SSH kernels, we can see the remote Pyton path listed.
+available. However for the SSH kernels, we can see the remote Python path listed.
 These paths are prefixed with the hostname, here :code:`host06:`. We can also see
 the newly added kernel listed as :code:`ssh_host06_host06kernel`. This name is an internal
 name created from the :code:`--display-name` string which the end user will typically
