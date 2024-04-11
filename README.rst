@@ -118,6 +118,8 @@ never see.
 Command line "add" options
 ==========================
 
+*this is here only because PyPI requires it to be here to accept this RST file*
+
 optional arguments
 ------------------
 
