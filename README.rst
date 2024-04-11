@@ -129,7 +129,7 @@ Command line "add" options
              Specify timeout to wait for kernel startup text.
              This option is **not used** by :code:`sshpyk`. It is only used by :code:`ssh_ipykernel`.
 
-*--env [ENV ...], -e [ENV ...]
+--env [ENV ...], -e [ENV ...]
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
              Specify environment variables for access by code executed within the remote Python
