@@ -50,24 +50,29 @@ Command line "ls" options
 
 The following options are available for listing the Jupyter kernel specifications:
 
-.. option::   **--help, -h:**
+--help, -h
+^^^^^^^^^^
 
               Show help information and exit.
 
-.. option::   **--all, -a:**
+--all, -a
+^^^^^^^^^
 
               List all kernels that are available rather than just
               `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ and sshpyk kernels.
 
-.. option::   **--local, -l:**
+--local, -l
+^^^^^^^^^^^
 
               Only list the information for the local Python executable.
 
-.. option::   **--remote, -r:**
+--remote, -r
+^^^^^^^^^^^^
 
               Only list the information for the remote Python executable.
               
-.. option::  **--no-check, -nc:**
+--no-check, -nc
+^^^^^^^^^^^^^^^
 
               Do not check for the existence local or remote Python executables. This option
               can be used alone or with other options, e.g. with :code:`-l`. :code:`--no-check`
@@ -119,25 +124,30 @@ Command line "add" options
 optional arguments
 ------------------
 
-.. option::  **--help, -h**
+--help, -h
+^^^^^^^^^^
 
              Show help information and exit.
 
-.. option::  **--timeout TIMEOUT, -t TIMEOUT**
+--timeout TIMEOUT, -t TIMEOUT
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
              Specify timeout to wait for kernel startup text.
              This option is **not used** by :code:`sshpyk`. It is only used by :code:`ssh_ipykernel`.
 
-.. option::  **--env [ENV ...], -e [ENV ...]**
+*--env [ENV ...], -e [ENV ...]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
              Specify environment variables for access by code executed within the remote Python
              kernel the form: :code:`"NAME=VALUE"`
 
-.. option::  **--display-name DISPLAY_NAME, -d DISPLAY_NAME**
+--display-name DISPLAY_NAME, -d DISPLAY_NAME
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
              Specify the string to be used to describe this kernel to the end user.
 
-.. option::  **--sudo, -s**
+--sudo, -s
+^^^^^^^^^^
 
              Use :code:`sudo` to start kernel on the remote machine.
              This option is **not currently used** by :code:`sshpyk`. It is only used by :code:`ssh_ipykernel`.
@@ -146,11 +156,13 @@ optional arguments
 required arguments
 ------------------
 
-.. option::  **--host HOST, -H HOST**
+--host HOST, -H HOST
+^^^^^^^^^^^^^^^^^^^^
 
              The name of remote host as used to connect with SSH.
 
-.. option::  **--python PATH, -p PATH**
+--python PATH, -p PATH
+^^^^^^^^^^^^^^^^^^^^^^
 
              Path to remote python installation. This is the path to the root of the Python
              installation so the Python executable would be found in :code:`<PATH>/bin/python`.
