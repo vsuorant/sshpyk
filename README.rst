@@ -1,24 +1,23 @@
 Remote Jupyter Kernels via SSH tunnels
 ######################################
 
-The design of this pakage is based upon `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ which is
-in turn based upon `remote_ikernel <https://bitbucket.org/tdaff/remote_ikernel>`_. This implementation shares
-the same command line parameters as `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_, but it was
-reimplemented from scratch to support Python 3.10. It also includes an :code:`ls` implementation which allows
-checking on the available kernel specifications.
+The design of this pakage is based upon `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ which
+in turn is based upon `remote_ikernel <https://bitbucket.org/tdaff/remote_ikernel>`_. This implementation shares
+a common set of command line parameters with `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_, but it was
+implemented from scratch to support Python 3.10. This package adds an :code:`ls` implementation which allows
+listing info about the available kernel specifications.
 
 While there are modest additions to `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_, there are
-also modest subtractions. There are fewer configuration options for things like the name that
-`Jupyter Client <https://jupyter-client.readthedocs.io/en/stable/#>`_ uses to refer to the
-kernel. This is still based on the kernel description that the user sees, but the entire name
-is no longer completely configurable.
+also modest subtractions. There are fewer configuration options for things like the internal name used
+by `Jupyter Client <https://jupyter-client.readthedocs.io/en/stable/#>`_ to refer to the created
+kernel.
 
 Listing the Jupyter Kernels that are available
 **********************************************
 
-It can be difficult to know which Jupyter Kernels are available because there is more than one location that
+It can be difficult to know which Jupyter Kernels are available because there are multiple locations where
 the `Kernel Spec files <https://jupyter-client.readthedocs.io/en/latest/kernels.html#kernel-specs>`_ can be
-stored. :code:`sshpyk` has an :code:`ls` option to all for seeing which kernels are available (even if they are
+found. :code:`sshpyk` has an :code:`ls` option which lists the kernels that are available (even those which are
 **not** `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ or :code:`sshpyk` kernels::
 
   bash$
@@ -36,11 +35,12 @@ should **not** be checked. The :code:`-a` (or :code:`--all`) flag indicates that
 specifications rather than just the ones for `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ or
 :code:`sshpyk` kernel specification files.
 
-If :code:`--no-check` is **not** supplied, then as part of listing the kernel information :code:`sshpyk` will
+If :code:`--no-check` is **not** supplied, part of listing the kernel information will include 
 verify that the Python executable specified in the kernel specification exist on the local and remote systems.
-:code:`--local` will limit the check to just the local Python executable and :code:`--remote` will limit the
-check to only the remote Python executable. These options also list the local or remote Python path **instead**
-of the path to the kernel specification directory.
+This check allows the ouput to be colorized so red text indicates a problem. :code:`--local` will limit the
+check to just the local Python executable and :code:`--remote` will limit the check to only the remote Python
+executable. These options also list the local or remote Python path **instead** of the path to the kernel
+specification directory.
 
 
 Command line "ls" options
