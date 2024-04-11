@@ -118,13 +118,6 @@ never see.
 Command line "add" options
 ==========================
 
-*this is here only because PyPI requires it to be here to accept this RST file*
-
-optional arguments
-------------------
-
-*this is here only because PyPI requires it to be here to accept this RST file*
-
 --help, -h
 ^^^^^^^^^^
 
@@ -153,11 +146,6 @@ optional arguments
              Use :code:`sudo` to start kernel on the remote machine.
              This option is **not currently used** by :code:`sshpyk`. It is only used by :code:`ssh_ipykernel`.
 
-
-required arguments
-------------------
-
-*this is here only because PyPI requires it to be here to accept this RST file*
 
 --host HOST, -H HOST
 ^^^^^^^^^^^^^^^^^^^^
