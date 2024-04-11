@@ -54,11 +54,11 @@ The following options are available for listing the Jupyter kernel specification
 
               Only list the information for the local Python executable.
 
-.. option::   --remote, -r
+.. option::   **--remote, -r**
 
               Only list the information for the remote Python executable.
               
-.. option::   --no-check, -nc
+.. option::  **--no-check, -nc**
 
               Do not check for the existence local or remote Python executables. This option
               can be used alone or with other options, e.g. with :code:`-l`.
