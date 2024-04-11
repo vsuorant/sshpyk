@@ -3,7 +3,7 @@ name = "sshpyk"
 dynamic = ["version"]
 description = "remote jupyter kernels via ssh tunnels"
 authors = [
-    {name = "Darrell Schiebel", email = "darrell@schiebel.us"},
+    {name = "National Radio Astronomy Observatory", email = "casa-feedback@nrao.edu"},
 ]
 
 dependencies = [ "jupyter-client" ]
