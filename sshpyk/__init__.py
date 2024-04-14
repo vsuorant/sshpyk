@@ -2,8 +2,10 @@ from jupyter_client import kernelspec as ks
 from subprocess import run, PIPE
 from getpass import getuser
 from shutil import which
+from os.path import join
 from json import dump
 import tempfile
+import json
 import sys
 import re
 import os
@@ -94,6 +96,13 @@ def add_kernel( host, display_name, remote_python_path, local_python_path=sys.ex
 
     return kernel_name
     
-def ls_kernel( ):
+def get_kernel_desc( all=False ):
+    def _json( kernel_path ):
+        with open( join( kernel_path, 'kernel.json' ) ) as f:
+            return json.load(f)
+        return None
+
     km = ks.KernelSpecManager( )
-    return km.find_kernel_specs( )
+    kdirs = km.find_kernel_specs( )
+    keys = sorted( kdirs.keys( ) if all else filter( lambda k: k.startswith('ssh_'), kdirs.keys( ) ) )
+    return { k: { 'ssh': k.startswith("ssh_"), 'path': kdirs[k], 'spec': _json(kdirs[k]) } for k in keys }

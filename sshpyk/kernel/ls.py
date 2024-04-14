@@ -2,15 +2,9 @@ from argparse import ArgumentParser, SUPPRESS
 from os.path import join, exists, basename
 from subprocess import run, PIPE
 from shutil import which
-import json
 
 def _red( s ):
     return f'''\033[31m{s}\033[0m'''
-
-def _json( kernel_path ):
-    with open( join( kernel_path, 'kernel.json' ) ) as f:
-        return json.load(f)
-    return None
 
 def _remote_exe( argv ):
     result = [None,None]
@@ -21,13 +15,11 @@ def _remote_exe( argv ):
             result[1] = p[1]
     return result
 
-def _exe( kernel_path ):
-    spec = _json(kernel_path)
-    d = basename(kernel_path)
-    if d.startswith('ssh_'):
-        return ( spec['argv'][0], *_remote_exe(spec['argv']) ) if spec else ( None, None, None )
+def _exe( desc ):
+    if desc['ssh']:
+        return ( desc['spec']['argv'][0], *_remote_exe(desc['spec']['argv']) ) if desc['spec'] else ( None, None, None )
     else:
-        return ( spec['argv'][0], None, None )
+        return ( desc['spec']['argv'][0], None, None )
 
 _rexists_checked_ = { }
 def rexists( host, path ):
@@ -53,55 +45,43 @@ def rexists( host, path ):
 
     return False
         
-def _kernel_paths( keys, kinfo ):
-    ###
-    ### Python is pathetic... you only get to traverse a filtered list once
-    ###
-    _keys = sorted(keys)
+def _kernel_paths( kinfo ):
     colsize = 0
-    for k in _keys:
+    for k in kinfo.keys( ):
         if len(k) > colsize: colsize = len(k)
-    for k in _keys:
-        e = _exe(kinfo[k])
-        if k.startswith('ssh_'):
+    for k,info in kinfo.items( ):
+        e = _exe(info)
+        if info['ssh']:
             ### remote kernel spec
             if args.no_check or e[0] is not None and e[1] is not None and e[2] is not None and exists(e[0]) and rexists(e[2],e[1]):
-                print(f'''{k.ljust(colsize)} {kinfo[k]}''')
+                print(f'''{k.ljust(colsize)} {info['path']}''')
             else:
-                print(f'''{k.ljust(colsize)} {_red(kinfo[k])}''')
+                print(f'''{k.ljust(colsize)} {_red(info['path'])}''')
         else:
             ### local kernel spec
             if args.no_check or e[0] is not None and ( not e[0].startswith('/') or exists(e[0]) ):
-                print(f'''{k.ljust(colsize)} {kinfo[k]}''')
+                print(f'''{k.ljust(colsize)} {info['path']}''')
             else:
-                print(f'''{k.ljust(colsize)} {_red(kinfo[k])}''')
+                print(f'''{k.ljust(colsize)} {_red(info['path'])}''')
 
-def _local_paths( keys, kinfo ):
-    ###
-    ### Python is pathetic... you only get to traverse a filtered list once
-    ###
-    _keys = sorted(keys)
+def _local_paths( kinfo ):
     colsize = 0
-    for k in _keys:
+    for k in kinfo.keys( ):
         if len(k) > colsize: colsize = len(k)
-    for k in _keys:
-        e = _exe(kinfo[k])
+    for k,info in kinfo.items( ):
+        e = _exe(info)
         if args.no_check or e[0] is not None and ( not e[0].startswith('/') or exists(e[0]) ):
             print(f'''{k.ljust(colsize)} {e[0]}''')
         else:
             print(f'''{k.ljust(colsize)} {_red(e[0])}''')
 
-def _remote_paths( keys, kinfo ):
-    ###
-    ### Python is pathetic... you only get to traverse a filtered list once
-    ###
-    _keys = sorted(keys)
+def _remote_paths( kinfo ):
     colsize = 0
-    for k in _keys:
+    for k in kinfo.keys( ):
         if len(k) > colsize: colsize = len(k)
-    for k in _keys:
-        e = _exe(kinfo[k])
-        if k.startswith('ssh_'):
+    for k,info in kinfo.items( ):
+        e = _exe(info)
+        if info['ssh']:
             ### remote kernel spec
             if args.no_check or e[1] is not None and e[2] is not None and rexists(e[2],e[1]):
                 print(f'''{k.ljust(colsize)} {e[2]}:{e[1]}''')
@@ -111,7 +91,7 @@ def _remote_paths( keys, kinfo ):
             print(f'''{k.ljust(colsize)} localhost:{e[0]}''')
     
 if __name__ == "__main__":
-    from .. import ls_kernel
+    from .. import get_kernel_desc
     parse = ArgumentParser( add_help=False )
 
     optional = parse.add_argument_group("optional arguments")
@@ -123,10 +103,10 @@ if __name__ == "__main__":
 
     args = parse.parse_args( )
 
-    kinfo = ls_kernel( )
+    kinfo = get_kernel_desc( args.all )
     if args.local:
-        _local_paths( kinfo.keys( ) if args.all else filter( lambda k: k.startswith('ssh_'), kinfo.keys( ) ), kinfo )
+        _local_paths( kinfo )
     elif args.remote:
-        _remote_paths( kinfo.keys( ) if args.all else filter( lambda k: k.startswith('ssh_'), kinfo.keys( ) ), kinfo )
+        _remote_paths( kinfo )
     else:
-        _kernel_paths( kinfo.keys( ) if args.all else filter( lambda k: k.startswith('ssh_'), kinfo.keys( ) ), kinfo )
+        _kernel_paths( kinfo )

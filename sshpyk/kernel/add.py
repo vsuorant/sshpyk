@@ -17,6 +17,7 @@ if __name__ == "__main__":
     optional.add_argument( "--timeout", "-t", type=int, default=5, help="specify timeout to use" )
     optional.add_argument( "--env", "-e", type=_assignment, nargs='*', default=[], help='add environment variable to set in the form: "NAME=VALUE"' )
     optional.add_argument( "--display-name", "-d", type=str, default=None, help='string which will be used to describe this kernel' )
+    optional.add_argument( "--session" action="store_true", help="signal that session information should be stored for this kernel" )
     optional.add_argument( "--sudo", "-s", action="store_true", help="sudo required to start kernel on remote machine" )
 
     required = parse.add_argument_group("required arguments")
@@ -28,4 +29,5 @@ if __name__ == "__main__":
         args.display_name = f'''{args.host}: {args.python}'''
 
     add_kernel( args.host, args.display_name, args.python,
-                env=args.env, sudo=args.sudo, system=args.sudo, timeout=args.timeout )
+                env=args.env, sudo=args.sudo, system=args.sudo,
+                timeout=args.timeout, session=args.session )

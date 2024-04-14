@@ -1,6 +1,8 @@
 import os
+import sys
 import json
 from os import execvp
+from pathlib import Path
 from functools import reduce as fold
 from uuid import uuid4
 from shutil import which
@@ -22,9 +24,22 @@ fd.close()
 print(ci)
 """
 
-def main( host, python, connection_info, env ):
+def store( conf ):
+    path = join( Path.home( ), '.sshpyk', 'sessions', conf['host'] )
+    try:
+        ### umask modifies mode parameter of makedirs...
+        ### however, umask=0 and mode=0o700 gives EVERYONE R/W/X permission...
+        original_umask = os.umask(0o077)
+        os.makedirs( path, exist_ok=True )
+    finally:
+        os.umask(original_umask)
+    with open( join( path, f'''{conf['id']}.json''' ), "w" ) as f:
+        json.dump( conf, f )
+
+def main( host, python, connection_info, env, session ):
     ssh = which('ssh')
-    remote_kernel_file = f'''/tmp/.sshpyk_{uuid4( )}.json'''
+    remote_id = uuid4( )
+    remote_kernel_file = f'''/tmp/.sshpyk_{remote_id}.json'''
     substituted_script = KERNEL_SCRIPT.format(fname=remote_kernel_file, **connection_info)
     script = '; '.join(substituted_script.strip( ).split("\n"))
 
@@ -33,10 +48,12 @@ def main( host, python, connection_info, env ):
     ###
     result = run( [ ssh, host, f"""{python} -c '{script}'""" ], stdout=PIPE, stderr=PIPE )
     remote_state = json.loads(result.stdout.decode('utf-8'))
-    f = open( "/tmp/out.txt", "w" )
-    print( '--------------------------------------------------------------------------------', file=f )
-    print( repr(remote_state), file=f )
-    print( '--------------------------------------------------------------------------------', file=f )
+
+    if session:
+        store( { 'host': host, 'id': str(remote_id),
+                 'paths': { 'ssh': ssh, 'remote py': python, 'local py': sys.executable, 'remote kernel file': remote_kernel_file },
+                 'connect': { 'local': connection_info, 'remote': remote_state } } )
+
     if type(remote_state) != dict or len(remote_state) <= 0:
         exit( 'Creation of remote ipykernel state failed.' )
 
@@ -51,10 +68,8 @@ def main( host, python, connection_info, env ):
     ssh_env = env if env else [ ]
     ssh_tunnels = fold( lambda acc,k: [ '-L', f'''{connection_info[k]}:{connection_info['ip']}:{remote_state[k]}''' ] + acc,
                         filter( lambda k: k.endswith('_port'), remote_state.keys() ), [] )
-    print( repr( ssh_tunnels ), file=f )
-    print( '--------------------------------------------------------------------------------', file=f )
-    f.close( )
-    execvp( ssh, [ 'ssh', '-q', '-t', *ssh_tunnels, host, f'''{' '.join(ssh_env)} {python} -m ipykernel_launcher --HistoryManager.hist_file=:memory: -f {remote_kernel_file}; rm -f {remote_kernel_file}''' ] )
+
+    execvp( ssh, [ 'ssh', '-q', '-t', *ssh_tunnels, host, f'''{' '.join(ssh_env)} {python} -m ipykernel_launcher --HistoryManager.hist_file=:memory: -f {remote_kernel_file}; echo {remote_id} $? >> "/tmp/.sshpyk_status.$USER.txt"; rm -f {remote_kernel_file}''' ] )
 
 if __name__ == "__main__":
     parse = ArgumentParser( add_help=False )
@@ -68,6 +83,7 @@ if __name__ == "__main__":
     optional.add_argument( "--name", "-n", type=str, help="kernel name" )
     optional.add_argument( "--env", "-e", nargs="*",
                            help="environment variables for the remote kernel in the form: VAR1=value1 VAR2=value2" )
+    optional.add_argument( "--session", action="store_true", help="store session information for this kernel" )
     optional.add_argument( "-s", action="store_true", help="sudo required to start kernel on the remote machine" )
 
 
@@ -94,4 +110,4 @@ if __name__ == "__main__":
     elif 'kernel_name' not in connection_info:
         connection_info['kernel_name'] = f'''ipykrn{os.getpid( )}'''
 
-    main( args.host, join(args.python, 'bin', 'python'), connection_info, args.env )
+    main( args.host, join(args.python, 'bin', 'python'), connection_info, args.env, args.session )

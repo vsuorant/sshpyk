@@ -4,8 +4,9 @@ Remote Jupyter Kernels via SSH tunnels
 The design of this pakage is based upon `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ which
 in turn is based upon `remote_ikernel <https://bitbucket.org/tdaff/remote_ikernel>`_. This implementation shares
 a common set of command line parameters with `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_, but it was
-implemented from scratch to support Python 3.10. This package adds an :code:`ls` implementation which allows
-listing info about the available kernel specifications.
+implemented from scratch to adapt to recent changes to :code:`jupyter_client` (which broke :code:`ssh_ipykernel`)
+and to support Python 3.10. This package adds an :code:`ls` implementation which allows listing info about the
+available kernel specifications.
 
 While there are modest additions to `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_, there are
 also modest subtractions. There are fewer configuration options for things like the internal name used
