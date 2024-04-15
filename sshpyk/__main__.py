@@ -69,7 +69,7 @@ def main( host, python, connection_info, env, session ):
     ssh_tunnels = fold( lambda acc,k: [ '-L', f'''{connection_info[k]}:{connection_info['ip']}:{remote_state[k]}''' ] + acc,
                         filter( lambda k: k.endswith('_port'), remote_state.keys() ), [] )
 
-    execvp( ssh, [ 'ssh', '-q', '-t', *ssh_tunnels, host, f'''{' '.join(ssh_env)} {python} -m ipykernel_launcher --HistoryManager.hist_file=:memory: -f {remote_kernel_file}; echo {remote_id} $? >> "/tmp/.sshpyk_status.$USER.txt"; rm -f {remote_kernel_file}''' ] )
+    execvp( ssh, [ 'ssh', '-q', '-t', *ssh_tunnels, host, f'''{' '.join(ssh_env)} bash -c "echo PID $$; exec {python} -m ipykernel_launcher --HistoryManager.hist_file=:memory: -f {remote_kernel_file}"; echo {remote_id} $? >> "/tmp/.sshpyk_status.$USER.txt"; rm -f {remote_kernel_file}''' ] )
 
 if __name__ == "__main__":
     parse = ArgumentParser( add_help=False )
