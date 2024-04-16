@@ -144,7 +144,8 @@ Command line "add" options
 --session
 ^^^^^^^^^
 
-             Signal that session information should be stored in :code:`~/.sshpyk/sessions` for this kernel".
+             Signal that session information should be stored in :code:`~/.sshpyk/sessions` for this kernel". This
+             option is **not used** by :code:`ssh_ipykernel`.
 
 --sudo, -s
 ^^^^^^^^^^
