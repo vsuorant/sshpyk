@@ -27,6 +27,11 @@ fd.close()
 print(ci)
 """
 
+def log( dest, msg ):
+    if msg is not None and dest is not None:
+        with open(dest,"a+") as f:
+            print(msg,file=f)
+
 def store( conf ):
     path = join( Path.home( ), '.sshpyk', 'sessions', conf['host'] )
     try:
@@ -39,7 +44,7 @@ def store( conf ):
     with open( join( path, f'''{conf['id']}.json''' ), "w" ) as f:
         json.dump( conf, f )
 
-def main( host, python, connection_info, env, session ):
+def main( host, python, connection_info, env, session, echo ):
     ssh = which('ssh')
     remote_id = uuid4( )
     remote_kernel_file = f'''/tmp/.sshpyk_{remote_id}.json'''
@@ -76,6 +81,7 @@ def main( host, python, connection_info, env, session ):
     ###
     ### collect startup info...
     ###
+    log_output = join( Path.home( ), '.sshpyk', 'sessions', host, f'''{remote_id}.txt''' ) if session else None
     remote_pid = -1
     tries = 100
     while tries > 0:
@@ -87,17 +93,26 @@ def main( host, python, connection_info, env, session ):
         if proc.stdout in readable:
             line = proc.stdout.readline( )
             if line:
-                info = line.decode('utf-8')
-                print(info)
+                decoded = line.decode('utf-8')
+                if echo: print( decoded )
+                log( log_output, decoded )
                 try:
                     ### this should ignore any cruft up to "PID <pid>" and extract <pid>
-                    remote_pid = int(re.compile(".*?PID (\d+)").match(info).group(1))
+                    remote_pid = int(re.compile(".*?PID (\d+)").match(decoded).group(1))
                     break
                 except: pass
             else: break
 
         tries -= 1
-        time.sleep(0.5)
+        try:
+            readable, writable, exceptional = select( [proc.stdout], [], [] )
+            if proc.stdout not in readable:
+                time.sleep(0.5)
+        except: pass               ### jupyter_client.KernelManager.shutdown_kernel( ) seems to be based upon
+                                   ### sending a KeyboardInterrupt exception...
+                                   ### When executing a script, the KeyboardInterrupt can be sent before the
+                                   ### <pid> has been collected... but maybe pass isn't exactly the right
+                                   ### thing to do anyway...
 
     ###
     ### store session information...
@@ -112,10 +127,16 @@ def main( host, python, connection_info, env, session ):
     ### can stop and reconnect to the remote kernel from another network (e.g.)... maybe
     ### https://stackoverflow.com/a/60309743/2903943
     ###
-    for line in proc.stdout:
-        print(line.decode( ))
-        sys.stdout.flush( )
-    proc.wait( )
+    try:
+        for line in proc.stdout:
+            info = line.decode( )
+            if echo: print( info )
+            log( log_output, info )
+            sys.stdout.flush( )
+    except: pass                   ### KeyboardInterrupt can occur here...
+    try:
+        proc.wait( )
+    except: pass                   ### KeyboardInterrupt can occur here...
 
 
 if __name__ == "__main__":
@@ -131,6 +152,7 @@ if __name__ == "__main__":
     optional.add_argument( "--env", "-e", nargs="*",
                            help="environment variables for the remote kernel in the form: VAR1=value1 VAR2=value2" )
     optional.add_argument( "--session", action="store_true", help="store session information for this kernel" )
+    optional.add_argument( "--echo", action="store_true", help="echo SSH connection output to stdout" )
     optional.add_argument( "-s", action="store_true", help="sudo required to start kernel on the remote machine" )
 
 
@@ -157,4 +179,4 @@ if __name__ == "__main__":
     elif 'kernel_name' not in connection_info:
         connection_info['kernel_name'] = f'''ipykrn{os.getpid( )}'''
 
-    main( args.host, join(args.python, 'bin', 'python'), connection_info, args.env, args.session )
+    main( args.host, join(args.python, 'bin', 'python'), connection_info, args.env, args.session, args.echo )

@@ -20,7 +20,7 @@ def version( ):
     return _VERSION
 
 def add_kernel( host, display_name, remote_python_path, local_python_path=sys.executable,
-                env=[], sudo=False, system=False, timeout=5 ):
+                env=[], sudo=False, system=False, timeout=5, session=False, echo=False ):
     '''
     Add a new kernel specification for a remote kernel
 
@@ -77,6 +77,10 @@ def add_kernel( host, display_name, remote_python_path, local_python_path=sys.ex
         "display_name": display_name,
         "language": "python",
     }
+    if session:
+        kernel_json["argv"].insert(-2, "--session")
+    if echo:
+        kernel_json["argv"].insert(-2, "--echo")
     if env:
         kernel_json["argv"].insert(-2, "--env")
         kernel_json["argv"].insert(-2, " ".join(env) )
