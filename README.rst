@@ -141,6 +141,11 @@ Command line "add" options
 
              Specify the string to be used to describe this kernel to the end user.
 
+--session
+^^^^^^^^^
+
+             Signal that session information should be stored in :code:`~/.sshpyk/sessions` for this kernel".
+
 --sudo, -s
 ^^^^^^^^^^
 

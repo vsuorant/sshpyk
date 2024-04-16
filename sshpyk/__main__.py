@@ -1,14 +1,17 @@
 import os
+import re
 import sys
 import json
+import time
 from os import execvp
 from pathlib import Path
 from functools import reduce as fold
 from uuid import uuid4
 from shutil import which
+from select import select
 from os.path import isfile, join
 from argparse import ArgumentParser, SUPPRESS
-from subprocess import run, PIPE
+from subprocess import run, Popen, PIPE, STDOUT
 
 from . import version
 
@@ -49,11 +52,6 @@ def main( host, python, connection_info, env, session ):
     result = run( [ ssh, host, f"""{python} -c '{script}'""" ], stdout=PIPE, stderr=PIPE )
     remote_state = json.loads(result.stdout.decode('utf-8'))
 
-    if session:
-        store( { 'host': host, 'id': str(remote_id),
-                 'paths': { 'ssh': ssh, 'remote py': python, 'local py': sys.executable, 'remote kernel file': remote_kernel_file },
-                 'connect': { 'local': connection_info, 'remote': remote_state } } )
-
     if type(remote_state) != dict or len(remote_state) <= 0:
         exit( 'Creation of remote ipykernel state failed.' )
 
@@ -69,7 +67,56 @@ def main( host, python, connection_info, env, session ):
     ssh_tunnels = fold( lambda acc,k: [ '-L', f'''{connection_info[k]}:{connection_info['ip']}:{remote_state[k]}''' ] + acc,
                         filter( lambda k: k.endswith('_port'), remote_state.keys() ), [] )
 
-    execvp( ssh, [ 'ssh', '-q', '-t', *ssh_tunnels, host, f'''{' '.join(ssh_env)} bash -c "echo PID $$; exec {python} -m ipykernel_launcher --HistoryManager.hist_file=:memory: -f {remote_kernel_file}"; echo {remote_id} $? >> "/tmp/.sshpyk_status.$USER.txt"; rm -f {remote_kernel_file}''' ] )
+    ###
+    ### start remote kernel...
+    ###
+    proc = Popen( [ 'ssh', '-q', '-t', *ssh_tunnels, host, f'''{' '.join(ssh_env)} bash -c "echo PID $$; exec {python} -m ipykernel_launcher --HistoryManager.hist_file=:memory: -f {remote_kernel_file}"; echo {remote_id} $? >> "/tmp/.sshpyk_status.$USER.txt"; rm -f {remote_kernel_file}''' ],
+                  stdout=PIPE, stderr=STDOUT )
+
+    ###
+    ### collect startup info...
+    ###
+    remote_pid = -1
+    tries = 100
+    while tries > 0:
+        ###
+        ### sites seem to like to generate a belch of boilerplate when logging in...
+        ### sift through the cruft looking for "PID <pid>"...
+        ###
+        readable, writable, exceptional = select( [proc.stdout], [], [] )
+        if proc.stdout in readable:
+            line = proc.stdout.readline( )
+            if line:
+                info = line.decode('utf-8')
+                print(info)
+                try:
+                    ### this should ignore any cruft up to "PID <pid>" and extract <pid>
+                    remote_pid = int(re.compile(".*?PID (\d+)").match(info).group(1))
+                    break
+                except: pass
+            else: break
+
+        tries -= 1
+        time.sleep(0.5)
+
+    ###
+    ### store session information...
+    ###
+    if session:
+        store( { 'host': host, 'id': str(remote_id), 'pid': remote_pid,
+                 'paths': { 'ssh': ssh, 'remote py': python, 'local py': sys.executable, 'remote kernel file': remote_kernel_file },
+                 'connect': { 'local': connection_info, 'remote': remote_state } } )
+
+    ###
+    ### Here we will need to eventually be able to separate (background) the remote kernel so that we
+    ### can stop and reconnect to the remote kernel from another network (e.g.)... maybe
+    ### https://stackoverflow.com/a/60309743/2903943
+    ###
+    for line in proc.stdout:
+        print(line.decode( ))
+        sys.stdout.flush( )
+    proc.wait( )
+
 
 if __name__ == "__main__":
     parse = ArgumentParser( add_help=False )
