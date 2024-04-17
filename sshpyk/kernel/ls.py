@@ -1,50 +1,12 @@
 from argparse import ArgumentParser, SUPPRESS
-from os.path import join, exists, basename
-from subprocess import run, PIPE
-from shutil import which
+from os.path import exists
+
+from .utils import kinfo_exe as _exe
+from .utils import rexists
 
 def _red( s ):
     return f'''\033[31m{s}\033[0m'''
 
-def _remote_exe( argv ):
-    result = [None,None]
-    for p in zip(argv[1:][::2],argv[2:][::2]):
-        if p[0] == '--python' or p[0] == "-p":
-            result[0] = f'''{p[1]}/bin/python''' if len(p[1]) > 0 else None
-        if p[0] == '--host' or p[0] == "-H":
-            result[1] = p[1]
-    return result
-
-def _exe( desc ):
-    if desc['ssh']:
-        return ( desc['spec']['argv'][0], *_remote_exe(desc['spec']['argv']) ) if desc['spec'] else ( None, None, None )
-    else:
-        return ( desc['spec']['argv'][0], None, None )
-
-_rexists_checked_ = { }
-def rexists( host, path ):
-    if f'''{host}:{path}''' in _rexists_checked_:
-        return _rexists_checked_[f'''{host}:{path}''']
-
-    if host is not None and path is not None:
-        ssh = which('ssh')
-        rproc = run( [ ssh, host, f'''file {path}/bin/python''' ], stdout=PIPE, stderr=PIPE )
-
-        output = rproc.stdout.decode('ASCII')
-
-        if len(output) == 0:
-            _rexists_checked_[f'''{host}:{path}'''] = False
-            return False
-
-        if '(No such file or directory)' in output:
-            _rexists_checked_[f'''{host}:{path}'''] = False
-            return False
-
-        _rexists_checked_[f'''{host}:{path}'''] = True
-        return True
-
-    return False
-        
 def _kernel_paths( kinfo ):
     colsize = 0
     for k in kinfo.keys( ):
@@ -103,7 +65,7 @@ if __name__ == "__main__":
 
     args = parse.parse_args( )
 
-    kinfo = get_kernel_desc( args.all )
+    kinfo = get_kernel_desc( all=args.all, valid_only=False )
     if args.local:
         _local_paths( kinfo )
     elif args.remote:
