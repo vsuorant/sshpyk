@@ -31,7 +31,7 @@ found. :code:`sshpyk` has an :code:`ls` option which lists the kernels that are 
   ssh_host06_host06homehost06condaenvspy310 /Users/drs/Library/Jupyter/kernels/ssh_host06_host06homehost06condaenvspy310
   bash$
 
-The :code:`--no-check` (or alternatively :code:`-nc`) flag indicates that the validity of the kernel spec files
+The :code:`--no-check` flag indicates that the validity of the kernel spec files
 should **not** be checked. The :code:`-a` (or :code:`--all`) flag indicates that it should show **all** kernel
 specifications rather than just the ones for `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ or
 :code:`sshpyk` kernel specification files.
@@ -70,12 +70,23 @@ The following options are available for listing the Jupyter kernel specification
 
               Only list the information for the remote Python executable.
               
---no-check, -nc
-^^^^^^^^^^^^^^^
+--no-check
+^^^^^^^^^^
 
               Do not check for the existence local or remote Python executables. This option
               can be used alone or with other options, e.g. with :code:`-l`. :code:`--no-check`
               avoids colorization to indicate problems so it can be useful for scripting.
+
+--no-color
+^^^^^^^^^^
+
+              Do not colorize the listing to make it more convenient for processing output.
+
+--verbose, -V
+^^^^^^^^^^^^^
+
+              Provide verbose output to make it easier to debug problems with kernel info.
+
 
 
 Adding a new Kernel for a Remote System
@@ -95,7 +106,7 @@ This will add a Python kernel which will run on :code:`host06`, and it will be c
 :code:`host06 kernel` when it is listed as an option for the user. We can check to see if it
 is now included by using the :code:`ls` functionality::
 
-  bash$ python3 -m sshpyk.kernel.ls -r -a -nc
+  bash$ python3 -m sshpyk.kernel.ls -r -a --no-check
   python3                                   localhost:python
   python3.8                                 localhost:/opt/local/bin/python3.8
   python3dbg                                localhost:/Users/drs/develop/casagui-ic-debugging/iclean_demo_venv/bin/python
