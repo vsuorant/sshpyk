@@ -29,7 +29,9 @@ print(ci)
 
 def log( dest, msg ):
     if msg is not None and dest is not None:
-        with open(dest,"a+") as f:
+        directory = os.path.dirname(dest)
+        if directory: os.makedirs(directory,exist_ok=True)
+        with open(dest,"a") as f:
             print(msg,file=f)
 
 def store( conf ):
