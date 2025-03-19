@@ -100,7 +100,7 @@ def main( host, python, connection_info, env, session, echo ):
                 log( log_output, decoded )
                 try:
                     ### this should ignore any cruft up to "PID <pid>" and extract <pid>
-                    remote_pid = int(re.compile(".*?PID (\d+)").match(decoded).group(1))
+                    remote_pid = int(re.compile(r".*?PID (\d+)").match(decoded).group(1))
                     break
                 except: pass
             else: break

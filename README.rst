@@ -1,7 +1,7 @@
 Remote Jupyter Kernels via SSH tunnels
 ######################################
 
-The design of this pakage is based upon `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ which
+The design of this package is based upon `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ which
 in turn is based upon `remote_ikernel <https://bitbucket.org/tdaff/remote_ikernel>`_. This implementation shares
 a common set of command line parameters with `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_, but it was
 implemented from scratch to adapt to recent changes to :code:`jupyter_client` (which broke :code:`ssh_ipykernel`)
@@ -38,7 +38,7 @@ specifications rather than just the ones for `SSH Kernel <https://github.com/ber
 
 If :code:`--no-check` is **not** supplied, part of listing the kernel information will include 
 verify that the Python executable specified in the kernel specification exist on the local and remote systems.
-This check allows the ouput to be colorized so red text indicates a problem. :code:`--local` will limit the
+This check allows the output to be colorized so red text indicates a problem. :code:`--local` will limit the
 check to just the local Python executable and :code:`--remote` will limit the check to only the remote Python
 executable. These options also list the local or remote Python path **instead** of the path to the kernel
 specification directory.
@@ -117,7 +117,7 @@ is now included by using the :code:`ls` functionality::
   bash$
 
 Unlike the example above, here we have asked that the remote Python path be displayed
-instead of showing the kernel specificaton directory. Since we again asked that *all kernels*
+instead of showing the kernel specification directory. Since we again asked that *all kernels*
 be displayed instead of only the SSH kernels, a Python path is displayed for the
 non-SSH kernels, but it is the local Python path as indicated by :code:`localhost:`.
 Because these three kernels are non-SSH kernels this is the only Python path that is
