@@ -15,14 +15,12 @@ from .kernel.utils import kinfo_exe, rexists
 
 try:
     from .__version__ import __version__
-
-    _VERSION = __version__
-except:
-    _VERSION = "0.0"
+except ImportError:
+    __version__ = "0.0"
 
 
 def version():
-    return _VERSION
+    return __version__
 
 
 def add_kernel(
@@ -30,7 +28,7 @@ def add_kernel(
     display_name,
     remote_python_path,
     local_python_path=sys.executable,
-    env=[],
+    env=None,
     sudo=False,
     system=False,
     timeout=5,
@@ -47,18 +45,24 @@ def add_kernel(
     display_name: str
         label displayed so the user will recognize this kernel
     remote_python_path: str
-        path to the remote python installation with ipykernel installed (the python executable would be <PATH>/bin/python3)
+        path to the remote python installation with ipykernel installed
+        (the python executable would be <PATH>/bin/python3)
     local_python_path: str
-        path the the local python installation with sshpyk (the python executable would be <PATH>/bin/python3)
+        path the the local python installation with sshpyk (the python executable would
+        be <PATH>/bin/python3)
     env: [ str ]
-        list of environment variables to set (list of strings with the form "<VARIABLE>=<VALUE>")
+        list of environment variables to set (list of strings with the form
+        "<VARIABLE>=<VALUE>")
     sudo: bool
         indicates if the remote ipykernel should be started with sudo
     system: bool
-        should the new kernel spec be created in the system area (True) or user area (False)
+        should the new kernel spec be created in the system area (True)
+        or user area (False)
     timeout: int
         SSH connection timeout
     """
+    if env is None:
+        env = []
 
     def simplify(name):
         return re.sub(r"[^a-zA-Z0-9\-\_]", "", name)[:60]
@@ -68,11 +72,13 @@ def add_kernel(
     if ssh is None:
         raise RuntimeError("could not find SSH executable ('ssh')")
 
-    rproc = run(
+    # TODO: sanitize inputs if possible
+    rproc = run(  # noqa: S603
         [ssh, host, f"file {remote_python_path}/bin/python"],
         stdout=PIPE,
         stderr=PIPE,
     )
+    # TODO: should this be utf-8? (i.e. no argument)
     output = rproc.stdout.decode("ASCII")
 
     if len(output) == 0:
@@ -112,7 +118,8 @@ def add_kernel(
     kernel_name = f"ssh_{host}_{simplify(display_name)}"
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        os.chmod(temp_dir, 0o755)
+        # TODO: check if permissions could be less permissive
+        os.chmod(temp_dir, 0o755)  # noqa: S103
 
         with open(os.path.join(temp_dir, "kernel.json"), "w") as fd:
             dump(kernel_json, fd, sort_keys=True, indent=2)
@@ -139,7 +146,7 @@ def get_kernel_desc(all=False, valid_only=True):
         k: {"ssh": k.startswith("ssh_"), "path": kdirs[k], "spec": _json(kdirs[k])}
         for k in keys
     }
-    if valid_only == False:
+    if valid_only is False:
         return result
     else:
 

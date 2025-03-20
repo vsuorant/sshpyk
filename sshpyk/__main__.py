@@ -24,7 +24,7 @@ fd = open(fname, "r")
 ci = fd.read()
 fd.close()
 print(ci)
-"""
+"""  # noqa: E501
 
 
 def log(dest, msg):
@@ -41,7 +41,8 @@ def store(conf):
     try:
         ### umask modifies mode parameter of makedirs...
         ### however, umask=0 and mode=0o700 gives EVERYONE R/W/X permission...
-        original_umask = os.umask(0o077)
+        # TODO: check if permissions could be less permissive
+        original_umask = os.umask(0o077)  # noqa: S103
         os.makedirs(path, exist_ok=True)
     finally:
         os.umask(original_umask)
@@ -52,7 +53,8 @@ def store(conf):
 def main(host, python, connection_info, env, session, echo):
     ssh = which("ssh")
     remote_id = uuid4()
-    remote_kernel_file = f"/tmp/.sshpyk_{remote_id}.json"
+    # TODO: don't use hardcoded path
+    remote_kernel_file = f"/tmp/.sshpyk_{remote_id}.json"  # noqa: S108
     substituted_script = KERNEL_SCRIPT.format(
         fname=remote_kernel_file, **connection_info
     )
@@ -61,10 +63,11 @@ def main(host, python, connection_info, env, session, echo):
     ###
     ### Create remote kernel file with port information...
     ###
-    result = run([ssh, host, f"{python} -c '{script}'"], stdout=PIPE, stderr=PIPE)
+    # TODO: sanitize inputs if possible
+    result = run([ssh, host, f"{python} -c '{script}'"], stdout=PIPE, stderr=PIPE)  # noqa: S603
     remote_state = json.loads(result.stdout.decode("utf-8"))
 
-    if type(remote_state) != dict or len(remote_state) <= 0:
+    if not isinstance(remote_state, dict) or len(remote_state) == 0:
         exit("Creation of remote ipykernel state failed.")
 
     ###
@@ -75,7 +78,7 @@ def main(host, python, connection_info, env, session, echo):
     ###
     ### This also removes the kernel configuration file after the ipykernel exits...
     ###
-    ssh_env = env if env else []
+    ssh_env = " ".join(env) if env else ""
     ssh_tunnels = fold(
         lambda acc, k: [
             "-L",
@@ -89,14 +92,16 @@ def main(host, python, connection_info, env, session, echo):
     ###
     ### start remote kernel...
     ###
-    proc = Popen(
-        [
+    # TODO: sanitize inputs if possible
+    # TODO: make long line more readable
+    proc = Popen(  # noqa: S603
+        [  # noqa: S607
             "ssh",
             "-q",
             "-t",
             *ssh_tunnels,
             host,
-            f'{" ".join(ssh_env)} bash -c "echo PID $$; exec {python} -m ipykernel_launcher --HistoryManager.hist_file=:memory: -f {remote_kernel_file}"; echo {remote_id} $? >> "/tmp/.sshpyk_status.$USER.txt"; rm -f {remote_kernel_file}',
+            f'{ssh_env} bash -c "echo PID $$; exec {python} -m ipykernel_launcher --HistoryManager.hist_file=:memory: -f {remote_kernel_file}"; echo {remote_id} $? >> "/tmp/.sshpyk_status.$USER.txt"; rm -f {remote_kernel_file}',  # noqa: E501
         ],
         stdout=PIPE,
         stderr=STDOUT,
@@ -131,7 +136,8 @@ def main(host, python, connection_info, env, session, echo):
                         re.compile(r".*?PID (\d+)").match(decoded).group(1)
                     )
                     break
-                except:
+                # TODO: catch explicit exception and log it
+                except:  # noqa: E722, S110
                     pass
             else:
                 break
@@ -141,8 +147,10 @@ def main(host, python, connection_info, env, session, echo):
             readable, writable, exceptional = select([proc.stdout], [], [])
             if proc.stdout not in readable:
                 time.sleep(0.5)
-        except:
-            pass  ### jupyter_client.KernelManager.shutdown_kernel( ) seems to be based upon
+        # TODO: catch explicit exception and log it
+        except:  # noqa: E722, S110
+            pass
+            ### jupyter_client.KernelManager.shutdown_kernel( ) seems to be based upon
             ### sending a KeyboardInterrupt exception...
             ### When executing a script, the KeyboardInterrupt can be sent before the
             ### <pid> has been collected... but maybe pass isn't exactly the right
@@ -168,7 +176,8 @@ def main(host, python, connection_info, env, session, echo):
         )
 
     ###
-    ### Here we will need to eventually be able to separate (background) the remote kernel so that we
+    ### Here we will need to eventually be able to separate (background) the remote
+    ### kernel so that we
     ### can stop and reconnect to the remote kernel from another network (e.g.)... maybe
     ### https://stackoverflow.com/a/60309743/2903943
     ###
@@ -179,11 +188,13 @@ def main(host, python, connection_info, env, session, echo):
                 print(info)
             log(log_output, info)
             sys.stdout.flush()
-    except:
+    # TODO: catch explicit exception and log it
+    except:  # noqa: E722, S110
         pass  ### KeyboardInterrupt can occur here...
     try:
         proc.wait()
-    except:
+    # TODO: catch explicit exception and log it
+    except:  # noqa: E722, S110
         pass  ### KeyboardInterrupt can occur here...
 
 
@@ -209,7 +220,8 @@ if __name__ == "__main__":
         "--env",
         "-e",
         nargs="*",
-        help="environment variables for the remote kernel in the form: VAR1=value1 VAR2=value2",
+        help="environment variables for the remote kernel in the form: "
+        + "VAR1=value1 VAR2=value2",
     )
     optional.add_argument(
         "--session",

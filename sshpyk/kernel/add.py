@@ -2,11 +2,11 @@ from argparse import SUPPRESS, ArgumentParser
 
 
 def _assignment(s):
-    if type(s) != str or len(s) == 0:
-        raise ValueError  # or TypeError, or `argparse.ArgumentTypeError
+    if not isinstance(s, str) or len(s) == 0:
+        raise ValueError(s)
     eqindex = s.find("=")
-    if eqindex < 0 or not s[0].isalpha() or not s[0:eqindex].isalnum():
-        raise ValueError  # or TypeError, or `argparse.ArgumentTypeError
+    if eqindex < 0 or not s[0].isalpha() or not s[:eqindex].isalnum():
+        raise ValueError(s)
     return s
 
 
@@ -67,7 +67,8 @@ if __name__ == "__main__":
         "--python",
         "-p",
         required=True,
-        help='path to remote python installation ("PATH/bin/python" would be the python executable)',
+        help="path to remote python installation "
+        + '("PATH/bin/python" would be the python executable)',
     )
 
     args = parse.parse_args()

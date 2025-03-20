@@ -23,8 +23,9 @@ def kinfo_exe(kinfo):
     Returns
     -------
     tuple: ( str, str, str )
-        Returns a tuple containing (1) local Python path, (2) remote Python path, (3) remote
-        host. If the spec is for a regular kernel, the last two elements will be None
+        Returns a tuple containing (1) local Python path, (2) remote Python path
+        and (3) remote host. If the spec is for a regular kernel,
+        the last two elements will be None
     """
     if kinfo["ssh"]:
         return (
@@ -59,8 +60,12 @@ def rexists(host, path):
 
     if host is not None and path is not None:
         ssh = which("ssh")
-        rproc = run([ssh, host, f"file {path}/bin/python"], stdout=PIPE, stderr=PIPE)
+        # TODO: sanitize inputs if possible
+        rproc = run(  # noqa: S603
+            [ssh, host, f"file {path}/bin/python"], stdout=PIPE, stderr=PIPE
+        )
 
+        # TODO: should this be utf-8? (i.e. no argument)
         output = rproc.stdout.decode("ASCII")
 
         if len(output) == 0:
