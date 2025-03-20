@@ -6,11 +6,11 @@ from .utils import rexists
 
 
 def _red(s):
-    return s if args.no_color else f"""\033[31m{s}\033[0m"""
+    return s if args.no_color else f"\033[31m{s}\033[0m"
 
 
 def _green(s):
-    return s if args.no_color else f"""\033[32m{s}\033[0m"""
+    return s if args.no_color else f"\033[32m{s}\033[0m"
 
 
 def _kernel_paths(kinfo):
@@ -34,7 +34,7 @@ def _kernel_paths(kinfo):
                     problems.append("no local Python path provided")
                     ok = False
                 elif not exists(e[0]):
-                    problems.append(f"""local Python path does not exist: {e[0]}""")
+                    problems.append(f"local Python path does not exist: {e[0]}")
                     ok = False
                 if e[1] is None:
                     problems.append("no remote Python path provided")
@@ -43,7 +43,7 @@ def _kernel_paths(kinfo):
                     problems.append("no remote host name provided")
                     ok = False
                 if e[1] is not None and e[2] is not None and not rexists(e[2], e[1]):
-                    problems.append(f"""remote Python path does not exist: {e[1]}""")
+                    problems.append(f"remote Python path does not exist: {e[1]}")
                     ok = False
 
             if (
@@ -59,11 +59,11 @@ def _kernel_paths(kinfo):
                     and rexists(e[2], e[1])
                 )
             ):
-                print(f"""{k.ljust(colsize)} {_green(info["path"])}""")
+                print(f"{k.ljust(colsize)} {_green(info['path'])}")
             else:
-                print(f"""{k.ljust(colsize)} {_red(info["path"])}""")
+                print(f"{k.ljust(colsize)} {_red(info['path'])}")
                 for problem in problems:
-                    print(f"""{k.ljust(colsize)} {_red(">>> " + problem)}""")
+                    print(f"{k.ljust(colsize)} {_red('>>> ' + problem)}")
         else:
             ### local kernel spec
             ###
@@ -76,7 +76,7 @@ def _kernel_paths(kinfo):
                     problems.append("no local Python path provided")
                     ok = False
                 elif not exists(e[0]):
-                    problems.append(f"""local Python path does not exist: {e[0]}""")
+                    problems.append(f"local Python path does not exist: {e[0]}")
                     ok = False
 
             if (
@@ -89,11 +89,11 @@ def _kernel_paths(kinfo):
                     and (not e[0].startswith("/") or exists(e[0]))
                 )
             ):
-                print(f"""{k.ljust(colsize)} {_green(info["path"])}""")
+                print(f"{k.ljust(colsize)} {_green(info['path'])}")
             else:
-                print(f"""{k.ljust(colsize)} {_red(info["path"])}""")
+                print(f"{k.ljust(colsize)} {_red(info['path'])}")
                 for problem in problems:
-                    print(f"""{k.ljust(colsize)} {_red(">>> " + problem)}""")
+                    print(f"{k.ljust(colsize)} {_red('>>> ' + problem)}")
 
 
 def _local_paths(kinfo):
@@ -113,7 +113,7 @@ def _local_paths(kinfo):
                 problems.append("no local Python path provided")
                 ok = False
             elif not exists(e[0]):
-                problems.append(f"""local Python path does not exist: {e[0]}""")
+                problems.append(f"local Python path does not exist: {e[0]}")
                 ok = False
 
         if (
@@ -126,11 +126,11 @@ def _local_paths(kinfo):
                 and (not e[0].startswith("/") or exists(e[0]))
             )
         ):
-            print(f"""{k.ljust(colsize)} {_green(e[0])}""")
+            print(f"{k.ljust(colsize)} {_green(e[0])}")
         else:
-            print(f"""{k.ljust(colsize)} {_red(e[0])}""")
+            print(f"{k.ljust(colsize)} {_red(e[0])}")
             for problem in problems:
-                print(f"""{k.ljust(colsize)} {_red(">>> " + problem)}""")
+                print(f"{k.ljust(colsize)} {_red('>>> ' + problem)}")
 
 
 def _remote_paths(kinfo):
@@ -157,7 +157,7 @@ def _remote_paths(kinfo):
                     problems.append("no remote host name provided")
                     ok = False
                 if e[1] is not None and e[2] is not None and not rexists(e[2], e[1]):
-                    problems.append(f"""remote Python path does not exist: {e[1]}""")
+                    problems.append(f"remote Python path does not exist: {e[1]}")
                     ok = False
 
             if (
@@ -171,11 +171,11 @@ def _remote_paths(kinfo):
                     and rexists(e[2], e[1])
                 )
             ):
-                print(f"""{k.ljust(colsize)} {_green(e[2])}:{e[1]}""")
+                print(f"{k.ljust(colsize)} {_green(e[2])}:{e[1]}")
             else:
-                print(f"""{k.ljust(colsize)} {_red(e[2] + ":" + e[1])}""")
+                print(f"{k.ljust(colsize)} {_red(e[2] + ':' + e[1])}")
                 for problem in problems:
-                    print(f"""{k.ljust(colsize)} {_red(">>> " + problem)}""")
+                    print(f"{k.ljust(colsize)} {_red('>>> ' + problem)}")
 
 
 if __name__ == "__main__":

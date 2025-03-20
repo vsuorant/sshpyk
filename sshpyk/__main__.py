@@ -45,14 +45,14 @@ def store(conf):
         os.makedirs(path, exist_ok=True)
     finally:
         os.umask(original_umask)
-    with open(join(path, f"""{conf["id"]}.json"""), "w") as f:
+    with open(join(path, f"{conf['id']}.json"), "w") as f:
         json.dump(conf, f)
 
 
 def main(host, python, connection_info, env, session, echo):
     ssh = which("ssh")
     remote_id = uuid4()
-    remote_kernel_file = f"""/tmp/.sshpyk_{remote_id}.json"""
+    remote_kernel_file = f"/tmp/.sshpyk_{remote_id}.json"
     substituted_script = KERNEL_SCRIPT.format(
         fname=remote_kernel_file, **connection_info
     )
@@ -61,7 +61,7 @@ def main(host, python, connection_info, env, session, echo):
     ###
     ### Create remote kernel file with port information...
     ###
-    result = run([ssh, host, f"""{python} -c '{script}'"""], stdout=PIPE, stderr=PIPE)
+    result = run([ssh, host, f"{python} -c '{script}'"], stdout=PIPE, stderr=PIPE)
     remote_state = json.loads(result.stdout.decode("utf-8"))
 
     if type(remote_state) != dict or len(remote_state) <= 0:
@@ -79,7 +79,7 @@ def main(host, python, connection_info, env, session, echo):
     ssh_tunnels = fold(
         lambda acc, k: [
             "-L",
-            f"""{connection_info[k]}:{connection_info["ip"]}:{remote_state[k]}""",
+            f"{connection_info[k]}:{connection_info['ip']}:{remote_state[k]}",
         ]
         + acc,
         filter(lambda k: k.endswith("_port"), remote_state.keys()),
@@ -96,7 +96,7 @@ def main(host, python, connection_info, env, session, echo):
             "-t",
             *ssh_tunnels,
             host,
-            f"""{" ".join(ssh_env)} bash -c "echo PID $$; exec {python} -m ipykernel_launcher --HistoryManager.hist_file=:memory: -f {remote_kernel_file}"; echo {remote_id} $? >> "/tmp/.sshpyk_status.$USER.txt"; rm -f {remote_kernel_file}""",
+            f'{" ".join(ssh_env)} bash -c "echo PID $$; exec {python} -m ipykernel_launcher --HistoryManager.hist_file=:memory: -f {remote_kernel_file}"; echo {remote_id} $? >> "/tmp/.sshpyk_status.$USER.txt"; rm -f {remote_kernel_file}',
         ],
         stdout=PIPE,
         stderr=STDOUT,
@@ -106,7 +106,7 @@ def main(host, python, connection_info, env, session, echo):
     ### collect startup info...
     ###
     log_output = (
-        join(Path.home(), ".sshpyk", "sessions", host, f"""{remote_id}.txt""")
+        join(Path.home(), ".sshpyk", "sessions", host, f"{remote_id}.txt")
         if session
         else None
     )
@@ -199,9 +199,7 @@ if __name__ == "__main__":
         default=SUPPRESS,
         help="show this help message and exit",
     )
-    optional.add_argument(
-        "--version", action="version", version=f"""sshrpy {version()}"""
-    )
+    optional.add_argument("--version", action="version", version=f"sshrpy {version()}")
 
     optional.add_argument(
         "--timeout", "-t", type=int, help="timeout for remote commands", default=5
@@ -238,10 +236,10 @@ if __name__ == "__main__":
 
     if args.name is not None:
         if len(args.name.split()) > 1:
-            exit(f"""Provided kernel name ('{args.name}') cannot contain whitespace.""")
+            exit(f"Provided kernel name ('{args.name}') cannot contain whitespace.")
 
     if not isfile(args.file):
-        exit(f"""Specified file ('{args.file}') does not exist.""")
+        exit(f"Specified file ('{args.file}') does not exist.")
 
     with open(args.file, "r") as fd:
         connection_info = json.loads(fd.read())
@@ -250,7 +248,7 @@ if __name__ == "__main__":
     if args.name is not None:
         connection_info["kernel_name"] = args.name
     elif "kernel_name" not in connection_info:
-        connection_info["kernel_name"] = f"""ipykrn{os.getpid()}"""
+        connection_info["kernel_name"] = f"ipykrn{os.getpid()}"
 
     main(
         args.host,

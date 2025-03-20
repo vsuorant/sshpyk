@@ -72,7 +72,7 @@ if __name__ == "__main__":
 
     args = parse.parse_args()
     if args.display_name is None:
-        args.display_name = f"""{args.host}: {args.python}"""
+        args.display_name = f"{args.host}: {args.python}"
 
     add_kernel(
         args.host,

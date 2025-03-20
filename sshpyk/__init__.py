@@ -69,17 +69,17 @@ def add_kernel(
         raise RuntimeError("could not find SSH executable ('ssh')")
 
     rproc = run(
-        [ssh, host, f"""file {remote_python_path}/bin/python"""],
+        [ssh, host, f"file {remote_python_path}/bin/python"],
         stdout=PIPE,
         stderr=PIPE,
     )
     output = rproc.stdout.decode("ASCII")
 
     if len(output) == 0:
-        raise RuntimeError(f"""could not reach '{host}' with ssh""")
+        raise RuntimeError(f"could not reach '{host}' with ssh")
 
     if "(No such file or directory)" in output:
-        raise RuntimeError(f"""not found on {host}: {output}""")
+        raise RuntimeError(f"not found on {host}: {output}")
 
     kernel_json = {
         "argv": [
@@ -109,7 +109,7 @@ def add_kernel(
     if sudo:
         kernel_json["argv"].insert(-2, "-s")
 
-    kernel_name = f"""ssh_{host}_{simplify(display_name)}"""
+    kernel_name = f"ssh_{host}_{simplify(display_name)}"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         os.chmod(temp_dir, 0o755)
