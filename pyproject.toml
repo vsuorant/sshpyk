@@ -5,11 +5,13 @@ description = "remote jupyter kernels via ssh tunnels"
 authors = [
     {name = "National Radio Astronomy Observatory", email = "casa-feedback@nrao.edu"},
 ]
-
 dependencies = [ "jupyter-client" ]
 requires-python = ">=3.8"
 readme = "README.rst"
 license = {text = "BSD-3-Clause"}
+
+[project.optional-dependencies]
+dev = ["pre-commit"]
 
 [tool]
 [tool.pdm]
@@ -22,3 +24,17 @@ write_template = "__version__ = '{}'"  # optional, default to "{}"
 [build-system]
 requires = ["pdm-pep517>=0.12.0"]
 build-backend = "pdm.pep517.api"
+
+# Ruff is installed using pre-commit
+[tool.ruff]
+line-length = 88
+target-version = "py38"
+lint.select = ["B", "E", "F", "I", "W", "N", "S"]
+lint.ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+[tool.ruff.lint.isort]
+known-first-party = ["sshpyk"]
