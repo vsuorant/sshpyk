@@ -36,7 +36,7 @@ should **not** be checked. The :code:`-a` (or :code:`--all`) flag indicates that
 specifications rather than just the ones for `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ or
 :code:`sshpyk` kernel specification files.
 
-If :code:`--no-check` is **not** supplied, part of listing the kernel information will include 
+If :code:`--no-check` is **not** supplied, part of listing the kernel information will include
 verify that the Python executable specified in the kernel specification exist on the local and remote systems.
 This check allows the output to be colorized so red text indicates a problem. :code:`--local` will limit the
 check to just the local Python executable and :code:`--remote` will limit the check to only the remote Python
@@ -69,7 +69,7 @@ The following options are available for listing the Jupyter kernel specification
 ^^^^^^^^^^^^
 
               Only list the information for the remote Python executable.
-              
+
 --no-check
 ^^^^^^^^^^
 
@@ -205,3 +205,21 @@ runs :code:`ssh host06`, SSH will first connect as :code:`BASTION-USERNAME` on
 
 This sort of configuration will allow :code:`host06` to be allowed as a hostname
 for remote kernels.
+
+Development
+###########
+
+In a Python 3.8 environment:
+
+1. `pip install -e ".[dev]"` # installs the python package in editable mode
+2. Reload your shell, e.g. open the terminal again.
+3. `pre-commit install`
+4. Make your changes to the files and test them.
+5. `git commit -m "your message"`, this will run the pre-commit hooks defined in `.pre-commit-config.yaml`. If your code has problems it won't let you commit.
+
+Run git hooks manually
+**********************
+
+To auto-format code, apply other small fixes (e.g. trailing whitespace) and to lint all the code:
+
+`pre-commit run --all-files`
