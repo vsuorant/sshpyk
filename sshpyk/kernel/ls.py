@@ -21,12 +21,10 @@ def _kernel_paths(kinfo):
     for k, info in kinfo.items():
         e = _exe(info)
         if info["ssh"]:
-            ### remote kernel spec
-            ###
-            ###   e[0]  => local python path
-            ###   e[1]  => remote python path
-            ###   e[2]  => remote host name
-            ###
+            # remote kernel spec
+            # e[0] => local python path
+            # e[1] => remote python path
+            # e[2] => remote host name
             problems = []
             ok = True
             if args.verbose:
@@ -65,10 +63,8 @@ def _kernel_paths(kinfo):
                 for problem in problems:
                     print(f"{k.ljust(colsize)} {_red('>>> ' + problem)}")
         else:
-            ### local kernel spec
-            ###
-            ###   e[0]   => local python path
-            ###
+            # local kernel spec
+            # e[0] => local python path
             problems = []
             ok = True
             if args.verbose:
@@ -103,9 +99,7 @@ def _local_paths(kinfo):
             colsize = len(k)
     for k, info in kinfo.items():
         e = _exe(info)
-        ###
-        ###   e[0]   => local python path
-        ###
+        # e[0] => local python path
         problems = []
         ok = True
         if args.verbose:
@@ -141,12 +135,10 @@ def _remote_paths(kinfo):
     for k, info in kinfo.items():
         e = _exe(info)
         if info["ssh"]:
-            ### remote kernel spec
-            ###
-            ###   e[0]  => local python path
-            ###   e[1]  => remote python path
-            ###   e[2]  => remote host name
-            ###
+            # remote kernel spec
+            # e[0] => local python path
+            # e[1] => remote python path
+            # e[2] => remote host name
             problems = []
             ok = True
             if args.verbose:

@@ -39,8 +39,8 @@ def log(dest, msg):
 def store(conf):
     path = join(Path.home(), ".sshpyk", "sessions", conf["host"])
     try:
-        ### umask modifies mode parameter of makedirs...
-        ### however, umask=0 and mode=0o700 gives EVERYONE R/W/X permission...
+        # umask modifies mode parameter of makedirs...
+        # however, umask=0 and mode=0o700 gives EVERYONE R/W/X permission...
         # TODO: check if permissions could be less permissive
         original_umask = os.umask(0o077)  # noqa: S103
         os.makedirs(path, exist_ok=True)
@@ -60,9 +60,7 @@ def main(host, python, connection_info, env, session, echo):
     )
     script = "; ".join(substituted_script.strip().split("\n"))
 
-    ###
-    ### Create remote kernel file with port information...
-    ###
+    # Create remote kernel file with port information...
     # TODO: sanitize inputs if possible
     result = run([ssh, host, f"{python} -c '{script}'"], stdout=PIPE, stderr=PIPE)  # noqa: S603
     remote_state = json.loads(result.stdout.decode("utf-8"))
@@ -70,14 +68,11 @@ def main(host, python, connection_info, env, session, echo):
     if not isinstance(remote_state, dict) or len(remote_state) == 0:
         exit("Creation of remote ipykernel state failed.")
 
-    ###
-    ### Launch kernel on remote system with SSH tunnels between the local ports
-    ### and the remote ports... tunnel format is '-L {local}:IP:{remote}' where
-    ### IP is one of 127.0.0.1 or localhost (not sure if this is referring to
-    ### the local or remote host...
-    ###
-    ### This also removes the kernel configuration file after the ipykernel exits...
-    ###
+    # Launch kernel on remote system with SSH tunnels between the local ports
+    # and the remote ports... tunnel format is '-L {local}:IP:{remote}' where
+    # IP is one of 127.0.0.1 or localhost (not sure if this is referring to
+    # the local or remote host...
+    # This also removes the kernel configuration file after the ipykernel exits...
     ssh_env = " ".join(env) if env else ""
     ssh_tunnels = fold(
         lambda acc, k: [
@@ -89,9 +84,7 @@ def main(host, python, connection_info, env, session, echo):
         [],
     )
 
-    ###
-    ### start remote kernel...
-    ###
+    # start remote kernel...
     # TODO: sanitize inputs if possible
     # TODO: make long line more readable
     proc = Popen(  # noqa: S603
@@ -107,9 +100,7 @@ def main(host, python, connection_info, env, session, echo):
         stderr=STDOUT,
     )
 
-    ###
-    ### collect startup info...
-    ###
+    # collect startup info...
     log_output = (
         join(Path.home(), ".sshpyk", "sessions", host, f"{remote_id}.txt")
         if session
@@ -118,10 +109,8 @@ def main(host, python, connection_info, env, session, echo):
     remote_pid = -1
     tries = 100
     while tries > 0:
-        ###
-        ### sites seem to like to generate a belch of boilerplate when logging in...
-        ### sift through the cruft looking for "PID <pid>"...
-        ###
+        # sites seem to like to generate a belch of boilerplate when logging in...
+        # sift through the cruft looking for "PID <pid>"...
         readable, writable, exceptional = select([proc.stdout], [], [])
         if proc.stdout in readable:
             line = proc.stdout.readline()
@@ -131,7 +120,7 @@ def main(host, python, connection_info, env, session, echo):
                     print(decoded)
                 log(log_output, decoded)
                 try:
-                    ### this should ignore any cruft up to "PID <pid>" and extract <pid>
+                    # this should ignore any cruft up to "PID <pid>" and extract <pid>
                     remote_pid = int(
                         re.compile(r".*?PID (\d+)").match(decoded).group(1)
                     )
@@ -150,15 +139,13 @@ def main(host, python, connection_info, env, session, echo):
         # TODO: catch explicit exception and log it
         except:  # noqa: E722, S110
             pass
-            ### jupyter_client.KernelManager.shutdown_kernel( ) seems to be based upon
-            ### sending a KeyboardInterrupt exception...
-            ### When executing a script, the KeyboardInterrupt can be sent before the
-            ### <pid> has been collected... but maybe pass isn't exactly the right
-            ### thing to do anyway...
+            # jupyter_client.KernelManager.shutdown_kernel( ) seems to be based upon
+            # sending a KeyboardInterrupt exception...
+            # When executing a script, the KeyboardInterrupt can be sent before the
+            # <pid> has been collected... but maybe pass isn't exactly the right
+            # thing to do anyway...
 
-    ###
-    ### store session information...
-    ###
+    # store session information...
     if session:
         store(
             {
@@ -175,12 +162,10 @@ def main(host, python, connection_info, env, session, echo):
             }
         )
 
-    ###
-    ### Here we will need to eventually be able to separate (background) the remote
-    ### kernel so that we
-    ### can stop and reconnect to the remote kernel from another network (e.g.)... maybe
-    ### https://stackoverflow.com/a/60309743/2903943
-    ###
+    # Here we will need to eventually be able to separate (background) the remote
+    # kernel so that we
+    # can stop and reconnect to the remote kernel from another network (e.g.)... maybe
+    # https://stackoverflow.com/a/60309743/2903943
     try:
         for line in proc.stdout:
             info = line.decode()
@@ -190,19 +175,19 @@ def main(host, python, connection_info, env, session, echo):
             sys.stdout.flush()
     # TODO: catch explicit exception and log it
     except:  # noqa: E722, S110
-        pass  ### KeyboardInterrupt can occur here...
+        pass  # KeyboardInterrupt can occur here...
     try:
         proc.wait()
     # TODO: catch explicit exception and log it
     except:  # noqa: E722, S110
-        pass  ### KeyboardInterrupt can occur here...
+        pass  # KeyboardInterrupt can occur here...
 
 
 if __name__ == "__main__":
     parse = ArgumentParser(add_help=False)
     optional = parse.add_argument_group("optional arguments")
 
-    ### prevents --help from appearing in it's own "options:" group
+    # prevents --help from appearing in it's own "options:" group
     optional.add_argument(
         "--help",
         "-h",
