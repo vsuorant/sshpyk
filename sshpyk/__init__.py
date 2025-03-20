@@ -1,29 +1,43 @@
-from jupyter_client import kernelspec as ks
-from subprocess import run, PIPE
-from getpass import getuser
-from shutil import which
-from os.path import join, exists
-from json import dump
-import tempfile
 import json
-import sys
-import re
 import os
+import re
+import sys
+import tempfile
+from getpass import getuser
+from json import dump
+from os.path import exists, join
+from shutil import which
+from subprocess import PIPE, run
+
+from jupyter_client import kernelspec as ks
 
 from .kernel.utils import kinfo_exe, rexists
 
 try:
     from .__version__ import __version__
+
     _VERSION = __version__
 except:
-    _VERSION = '0.0'
+    _VERSION = "0.0"
 
-def version( ):
+
+def version():
     return _VERSION
 
-def add_kernel( host, display_name, remote_python_path, local_python_path=sys.executable,
-                env=[], sudo=False, system=False, timeout=5, session=False, echo=False ):
-    '''
+
+def add_kernel(
+    host,
+    display_name,
+    remote_python_path,
+    local_python_path=sys.executable,
+    env=[],
+    sudo=False,
+    system=False,
+    timeout=5,
+    session=False,
+    echo=False,
+):
+    """
     Add a new kernel specification for a remote kernel
 
     Parameters
@@ -44,23 +58,28 @@ def add_kernel( host, display_name, remote_python_path, local_python_path=sys.ex
         should the new kernel spec be created in the system area (True) or user area (False)
     timeout: int
         SSH connection timeout
-    '''
+    """
+
     def simplify(name):
         return re.sub(r"[^a-zA-Z0-9\-\_]", "", name)[:60]
 
-    ssh = which('ssh')
+    ssh = which("ssh")
 
     if ssh is None:
-        raise RuntimeError( "could not find SSH executable ('ssh')" )
+        raise RuntimeError("could not find SSH executable ('ssh')")
 
-    rproc = run( [ ssh, host, f'''file {remote_python_path}/bin/python''' ], stdout=PIPE, stderr=PIPE )
-    output = rproc.stdout.decode('ASCII')
+    rproc = run(
+        [ssh, host, f"""file {remote_python_path}/bin/python"""],
+        stdout=PIPE,
+        stderr=PIPE,
+    )
+    output = rproc.stdout.decode("ASCII")
 
     if len(output) == 0:
-        raise RuntimeError( f'''could not reach '{host}' with ssh''' )
+        raise RuntimeError(f"""could not reach '{host}' with ssh""")
 
-    if '(No such file or directory)' in output:
-        raise RuntimeError( f'''not found on {host}: {output}''' )
+    if "(No such file or directory)" in output:
+        raise RuntimeError(f"""not found on {host}: {output}""")
 
     kernel_json = {
         "argv": [
@@ -74,7 +93,7 @@ def add_kernel( host, display_name, remote_python_path, local_python_path=sys.ex
             "--timeout",
             str(timeout),
             "-f",
-            "{connection_file}"
+            "{connection_file}",
         ],
         "display_name": display_name,
         "language": "python",
@@ -85,12 +104,12 @@ def add_kernel( host, display_name, remote_python_path, local_python_path=sys.ex
         kernel_json["argv"].insert(-2, "--echo")
     if env:
         kernel_json["argv"].insert(-2, "--env")
-        kernel_json["argv"].insert(-2, " ".join(env) )
+        kernel_json["argv"].insert(-2, " ".join(env))
 
     if sudo:
         kernel_json["argv"].insert(-2, "-s")
 
-    kernel_name=f'''ssh_{host}_{simplify(display_name)}'''
+    kernel_name = f"""ssh_{host}_{simplify(display_name)}"""
 
     with tempfile.TemporaryDirectory() as temp_dir:
         os.chmod(temp_dir, 0o755)
@@ -98,24 +117,34 @@ def add_kernel( host, display_name, remote_python_path, local_python_path=sys.ex
         with open(os.path.join(temp_dir, "kernel.json"), "w") as fd:
             dump(kernel_json, fd, sort_keys=True, indent=2)
 
-        ks.install_kernel_spec( temp_dir, kernel_name, user=False if system else getuser( ), replace=True )
+        ks.install_kernel_spec(
+            temp_dir, kernel_name, user=False if system else getuser(), replace=True
+        )
 
     return kernel_name
-    
-def get_kernel_desc( all=False, valid_only=True ):
-    def _json( kernel_path ):
-        with open( join( kernel_path, 'kernel.json' ) ) as f:
+
+
+def get_kernel_desc(all=False, valid_only=True):
+    def _json(kernel_path):
+        with open(join(kernel_path, "kernel.json")) as f:
             return json.load(f)
         return None
 
-    km = ks.KernelSpecManager( )
-    kdirs = km.find_kernel_specs( )
-    keys = sorted( kdirs.keys( ) if all else filter( lambda k: k.startswith('ssh_'), kdirs.keys( ) ) )
-    result = { k: { 'ssh': k.startswith("ssh_"), 'path': kdirs[k], 'spec': _json(kdirs[k]) } for k in keys }
+    km = ks.KernelSpecManager()
+    kdirs = km.find_kernel_specs()
+    keys = sorted(
+        kdirs.keys() if all else filter(lambda k: k.startswith("ssh_"), kdirs.keys())
+    )
+    result = {
+        k: {"ssh": k.startswith("ssh_"), "path": kdirs[k], "spec": _json(kdirs[k])}
+        for k in keys
+    }
     if valid_only == False:
         return result
     else:
+
         def is_valid(kinfo):
             ex = kinfo_exe(kinfo[1])
-            return exists(ex[0]) and (ex[1] is None or rexists(ex[2],ex[1]))
-        return dict( filter( is_valid, result.items( ) ) )
+            return exists(ex[0]) and (ex[1] is None or rexists(ex[2], ex[1]))
+
+        return dict(filter(is_valid, result.items()))
