@@ -1,17 +1,13 @@
-import json
 import os
 import re
 import sys
 import tempfile
 from getpass import getuser
 from json import dump
-from os.path import exists, join
 from shutil import which
 from subprocess import PIPE, run
 
 from jupyter_client import kernelspec as ks
-
-from .kernel.utils import kinfo_exe, rexists
 
 try:
     from .__version__ import __version__
@@ -40,7 +36,7 @@ def add_kernel(
 
     Parameters
     ----------
-    host : str
+    host: str
         name of the host (as used from SSH)
     display_name: str
         label displayed so the user will recognize this kernel
@@ -129,29 +125,3 @@ def add_kernel(
         )
 
     return kernel_name
-
-
-def get_kernel_desc(all=False, valid_only=True):
-    def _json(kernel_path):
-        with open(join(kernel_path, "kernel.json")) as f:
-            return json.load(f)
-        return None
-
-    km = ks.KernelSpecManager()
-    kdirs = km.find_kernel_specs()
-    keys = sorted(
-        kdirs.keys() if all else filter(lambda k: k.startswith("ssh_"), kdirs.keys())
-    )
-    result = {
-        k: {"ssh": k.startswith("ssh_"), "path": kdirs[k], "spec": _json(kdirs[k])}
-        for k in keys
-    }
-    if valid_only is False:
-        return result
-    else:
-
-        def is_valid(kinfo):
-            ex = kinfo_exe(kinfo[1])
-            return exists(ex[0]) and (ex[1] is None or rexists(ex[2], ex[1]))
-
-        return dict(filter(is_valid, result.items()))
