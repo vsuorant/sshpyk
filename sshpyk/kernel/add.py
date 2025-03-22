@@ -100,6 +100,13 @@ def add_kernel(
         ],
         "display_name": display_name,
         "language": "python",
+        # interrupt_mode="signal": process receives SIGINT, but in our case this will
+        # kill the local process and not the remote process, leaving a zombie process on
+        # the remote machine.
+        # interrupt_mode="message": remote process receives a message instructing it
+        # to interrupt the kernel.
+        # Tested with a remote ipython kernel in JupyterLab. Interrupt button works.
+        "interrupt_mode": "message",
     }
     if session:
         kernel_json["argv"].insert(-2, "--session")
