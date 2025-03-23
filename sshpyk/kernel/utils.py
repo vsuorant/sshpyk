@@ -65,8 +65,7 @@ def rexists(host, path):
             [ssh, host, f"file {path}/bin/python"], stdout=PIPE, stderr=PIPE
         )
 
-        # TODO: should this be utf-8? (i.e. no argument)
-        output = rproc.stdout.decode("ASCII")
+        output = rproc.stdout.decode()
 
         if len(output) == 0:
             __rexists_checked[f"{host}:{path}"] = False

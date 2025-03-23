@@ -63,7 +63,7 @@ def main(host, python, connection_info, env, session, echo):
     # Create remote kernel file with port information...
     # TODO: sanitize inputs if possible
     result = run([ssh, host, f"{python} -c '{script}'"], stdout=PIPE, stderr=PIPE)  # noqa: S603
-    remote_state = json.loads(result.stdout.decode("utf-8"))
+    remote_state = json.loads(result.stdout.decode())
 
     if not isinstance(remote_state, dict) or len(remote_state) == 0:
         exit("Creation of remote ipykernel state failed.")
@@ -115,7 +115,7 @@ def main(host, python, connection_info, env, session, echo):
         if proc.stdout in readable:
             line = proc.stdout.readline()
             if line:
-                decoded = line.decode("utf-8")
+                decoded = line.decode()
                 if echo:
                     print(decoded)
                 log(log_output, decoded)

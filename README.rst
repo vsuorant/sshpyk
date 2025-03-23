@@ -95,8 +95,8 @@ Adding a new Kernel for a Remote System
 :code:`sshpyk` can also be used to add a specification file for a remote Python Kernel. For a
 remote kernel to work
 
-* :code:`ssypyk` must be installed on the local system
-* :code:`ipykernel` must be installed on the remote system
+* :code:`sshpyk` must be installed on the local system (which depends on :code:`jupyter_client` explicitly)
+* :code:`ipykernel` must be installed on the remote system (which depends on :code:`jupyter_client` too)
 
 Once these requirements are satisfied, the new kernel can be added like::
 

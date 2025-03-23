@@ -75,8 +75,7 @@ def add_kernel(
         stdout=PIPE,
         stderr=PIPE,
     )
-    # TODO: should this be utf-8? (i.e. no argument)
-    output = rproc.stdout.decode("ASCII")
+    output = rproc.stdout.decode()
 
     if len(output) == 0:
         raise RuntimeError(f"could not reach '{host}' with ssh")
