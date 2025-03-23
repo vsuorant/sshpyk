@@ -10,6 +10,12 @@ requires-python = ">=3.8"
 readme = "README.rst"
 license = {text = "BSD-3-Clause"}
 
+# Integrate with Jupyter Client
+[project.entry-points."jupyter_client.kernel_provisioners"]
+sshpyk-provisioner = "sshpyk.provisioning:SSHKernelProvisioner"
+
+# Dev config
+
 [project.optional-dependencies]
 dev = ["pre-commit"]
 
