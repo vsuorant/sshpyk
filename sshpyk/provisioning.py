@@ -75,8 +75,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     process = None
     process_tunnels = None
+
     ports_cached = False
     ssh = None
+
     rem_python = None
     rem_jupyter = None
     rem_conn_fp = None
@@ -307,21 +309,33 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     async def get_provisioner_info(self) -> Dict:
         """Get information about this provisioner instance."""
         provisioner_info = await super().get_provisioner_info()
-        # TODO
-        # provisioner_info.update(
-        #     {
-        #         "ssh_host": self.ssh_host,
-        #         "remote_python_prefix": self.remote_python_prefix,
-        #         "remote_kernel_name": self.remote_kernel_name,
-        #         "remote_id": self.remote_id,
-        #     }
-        # )
+        provisioner_info.update(
+            {
+                "ssh_host": self.ssh_host,
+                "remote_python_prefix": self.remote_python_prefix,
+                "remote_kernel_name": self.remote_kernel_name,
+                "pid": self.pid,
+                "pgid": self.pgid,
+                "pid_tunnels": self.pid_tunnels,
+                "pgid_tunnels": self.pgid_tunnels,
+                "rem_conn_fp": self.rem_conn_fp,
+                "rem_conn_info": self.rem_conn_info,
+            }
+        )
         return provisioner_info
 
     async def load_provisioner_info(self, provisioner_info: Dict) -> None:
         """Load information about this provisioner instance."""
-        # TODO
         await super().load_provisioner_info(provisioner_info)
+        self.ssh_host = provisioner_info["ssh_host"]
+        self.remote_python_prefix = provisioner_info["remote_python_prefix"]
+        self.remote_kernel_name = provisioner_info["remote_kernel_name"]
+        self.pid = provisioner_info["pid"]
+        self.pgid = provisioner_info["pgid"]
+        self.pid_tunnels = provisioner_info["pid_tunnels"]
+        self.pgid_tunnels = provisioner_info["pgid_tunnels"]
+        self.rem_conn_fp = provisioner_info["rem_conn_fp"]
+        self.rem_conn_info = provisioner_info["rem_conn_info"]
 
     async def cleanup(self, restart: bool = False) -> None:
         """Clean up resources used by the provisioner."""
