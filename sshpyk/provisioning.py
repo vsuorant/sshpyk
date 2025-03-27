@@ -10,11 +10,11 @@ import time
 from pathlib import Path
 from shutil import which
 from subprocess import PIPE, Popen, run
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from jupyter_client.connect import KernelConnectionInfo, LocalPortCache
 from jupyter_client.provisioning.provisioner_base import KernelProvisionerBase
-from traitlets import Unicode
+from traitlets import Integer, Unicode
 
 
 def _nope(*args, **kwargs):
@@ -45,6 +45,11 @@ class UnicodePath(Unicode):
             raise
 
 
+RGX_CONN_FP = re.compile(r"file: (.*\.json)")
+PID_PREFIX = "KERNEL_APP_PID="
+RGX_PID = re.compile(rf"{PID_PREFIX}(\d+)")
+
+
 class SSHKernelProvisioner(KernelProvisionerBase):
     """
     Kernel provisioner that launches Jupyter kernels on remote systems via SSH.
@@ -73,6 +78,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         + "(i.e. first column of `jupyter kernelspec list` on the remote system).",
         allow_none=False,
     )
+    remote_kernel_launch_timeout = Integer(
+        default=60,
+        config=True,
+        help="Timeout for launching the remote kernel through the ssh command.",
+        allow_none=False,
+    )
 
     process = None
     process_tunnels = None
@@ -89,13 +100,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     pgid = None
     pid_tunnels = None
     pgid_tunnels = None
+    rem_pid = None
 
     # Use asyncio to read output with timeout
     async def extract_connection_file_from_process_pipes(
-        self, timeout: int = 30
-    ) -> Optional[str]:
+        self, timeout: int
+    ) -> Tuple[Optional[int], Optional[str]]:
         """
-        When executing the `jupyter kernel --kernel=...` it prints:
+        When executing the `jupyter kernel --kernel=...` it prints (to stderr):
         ```
         [KernelApp] Starting kernel 'python3'
         [KernelApp] Connection file: /some/path/to/the/connection_file.json
@@ -105,6 +117,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         selector = selectors.DefaultSelector()
         selector.register(self.process.stdout, selectors.EVENT_READ, "stdout")
         selector.register(self.process.stderr, selectors.EVENT_READ, "stderr")
+
+        remote_pid = conn_file_path = None
 
         t = time.time()
         while time.time() - t < timeout:
@@ -126,30 +140,42 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     # Log both stdout and stderr
                     self.log.info(f"Remote jupyter {pipe_name}: {line_str}")
                     # Then information was output into the stderr, but check both
-                    match = re.search(r"file: (.*\.json)", line_str)
+                    match = RGX_PID.search(line_str)
                     if match:
-                        return match.group(1)
+                        remote_pid = int(match.group(1))
+                    match = RGX_CONN_FP.search(line_str)
+                    if match:
+                        conn_file_path = match.group(1)
+                    if remote_pid and conn_file_path:
+                        return remote_pid, conn_file_path
 
             # If no pipes left to monitor or process ended, exit loop
             if not selector.get_map() or self.process.poll() is not None:
-                return None
+                return remote_pid, conn_file_path
 
         raise TimeoutError(timeout)
 
-    async def extract_connection_file(self, rem_cmd: str, timeout: int = 30) -> str:
+    async def extract_connection_file(self, rem_cmd: str, timeout: int):
         self.log.debug(
             f"Waiting for remote connection file path from {rem_cmd!r} ({timeout = })"
         )
         try:
-            rcf = await self.extract_connection_file_from_process_pipes(timeout=timeout)
+            rpid, rcf = await self.extract_connection_file_from_process_pipes(
+                timeout=timeout
+            )
         except TimeoutError as e:
             msg = f"Timed out ({timeout}s) waiting for connection file information"
             self.log.error(msg)
             self.log.exception(e)
             raise RuntimeError(msg) from e
 
+        if not rpid:
+            msg = f"Could not extract PID of remote process during {rem_cmd!r}"
+            self.log.error(msg)
+            raise RuntimeError(msg)
+
         if not rcf:
-            msg = f"Could not extract connection file path on remote from {rem_cmd!r}"
+            msg = f"Could not extract connection file path on remote during {rem_cmd!r}"
             self.log.error(msg)
             raise RuntimeError(msg)
 
@@ -161,14 +187,16 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise RuntimeError(msg) from e
 
         self.log.info(f"Connection file path on remote: {rcf}")
-        return rcf
+        return rpid, rcf
 
     def fetch_remote_connection_info(self) -> Dict[str, Any]:
         try:
             # For details on the way the processes are spawned see the Popen call in
             # pre_launch().
+            cmd = [self.ssh, "-q", self.ssh_host, f"cat {self.rem_conn_fp!r}"]
+            self.log.info(f"Fetching remote connection file {cmd = }")
             result = run(  # noqa: S603
-                [self.ssh, "-q", self.ssh_host, f"cat {self.rem_conn_fp!r}"],
+                cmd,
                 stdout=PIPE,
                 stderr=PIPE,
                 stdin=PIPE,
@@ -197,8 +225,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         jupyter-kernel command, this function ACTUALLY launches the remote kernel
         and later in launch_kernel() it sets up the SSH tunnels.
         """
-        self.log.info(f"{getattr(self, 'connection_info', None) = }")
-
         if (
             not self.ssh_host
             or not self.remote_python_prefix
@@ -206,8 +232,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         ):
             raise ValueError("Bad configuration")
 
-        self.rem_python = str(Path(self.remote_python_prefix) / "bin" / "python")
-        self.rem_jupyter = str(Path(self.remote_python_prefix) / "bin" / "jupyter")
+        p = Path(self.remote_python_prefix)
+        self.rem_python = str(p / "bin" / "python")
+        self.rem_jupyter = str(p / "bin" / "jupyter-kernel")
 
         self.ssh = which("ssh")
         if not self.ssh:
@@ -230,28 +257,44 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         ]
 
         # When we restart the kernel use the same connection file and key, otherwise it
-        # will be different and there is an unhandled exception in the jupyter client.
+        # will be different and there is an unhandled exception in the local jupyter
+        # server.
+        # The problem comes from the jupyter_client (on remote system) that does this:
+        # def write_connection_file(self) -> None:
+        #     """Write connection info to JSON dict in self.connection_file."""
+        #     if self._connection_file_written and os.path.exists(self.connection_file):
+        #         return
+        #     self.connection_file, cfg = write_connection_file(...)
+        # While self._connection_file_written has initial value as `False`.
+
         if self.rem_conn_fp is not None:
             rem_args.append(f"--KernelManager.connection_file='{self.rem_conn_fp}'")
             session_key_str = self.connection_info["key"].decode()
-            # For some reason simply specifying the connection file did not work.
+            # Simply specifying the connection file does not work due to the way the
+            # remote KernelApp works.
             # But this seems to do the trick of forcing the remote kernel to use the
             # provided key (which was generated when we started the remote kernel
             # for the first time).
             rem_args.append(f"--ConnectionFileMixin.Session.key={session_key_str}")
 
         rem_cmd = " ".join(rem_args)
+        # Use nohup to ensure the remote kernel is not killed is fully detached from the
+        # local machine to avoid it being killed unintentionally (e.g. network issues).
+        # NOTE: I am not sure if running a `nohup` inside a Popen(...) is a canonical
+        # thing to do. But it seems to work well without the need to redirect outputs
+        # to some file on the remote systems and then run yet another ssh call to fetch
+        # that file, potentially several times till the remote kernel has started.
+        rem_cmd = f"exec nohup {rem_cmd} & echo {PID_PREFIX}$!"
+        self.log.info(f"Remote command: {rem_cmd!r}")
         cmd = [
             self.ssh,
             "-q",  # mute ssh output
-            # Allocate a pseudo-tty.
-            # Without this the remote kernel processes stays in 'Z' (zombie) mode when
-            # the client (e.g. JupyterLab) instructs the kernel to shutdown.
-            # "-t",
+            # "-t", # NB We don't need a pseudo-tty to be allocated.
             self.ssh_host,
-            # `exec` used to have less remote processes
-            f"exec {rem_cmd}",
+            rem_cmd,
         ]
+        self.log.info(f"Local command: {cmd!r}")
+
         # The way the processes are spawned is very important.
         # See launch_kernel() source code in jupyter_client for details.
         self.process = Popen(  # noqa: S603
@@ -266,7 +309,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # causing jupyter to try to launch them again, etc..
             start_new_session=True,
         )
-        # Close the pipe, see launch_kernel in jupyter_client
+        # Close the input pipe, see launch_kernel in jupyter_client
         self.process.stdin.close()
 
         self.pid = self.process.pid
@@ -276,7 +319,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         except OSError:
             pass
 
-        rem_conn_fp = await self.extract_connection_file(rem_cmd, timeout=30)
+        self.rem_pid, rem_conn_fp = await self.extract_connection_file(
+            rem_cmd, timeout=self.remote_kernel_launch_timeout
+        )
+        self.log.info(
+            f"Remote kernel launched, PID of remote KernelApp: {self.rem_pid}"
+        )
+        # We are done with the starting the remote kernel. We know its PID to kill it
+        # later.
+        self.process.terminate()
+        await self._wait("process")
+
         if self.rem_conn_fp is None:
             self.rem_conn_fp = rem_conn_fp
         elif self.rem_conn_fp != rem_conn_fp:
@@ -364,21 +417,23 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             stdin=PIPE,
             start_new_session=True,
         )
-        # Close the pipe, see launch_kernel in jupyter_client
+        # Close the input pipe, see launch_kernel in jupyter_client
         self.process_tunnels.stdin.close()
 
         self.pid_tunnels = self.process_tunnels.pid
         self.pgid_tunnels = None
         try:
-            self.pgid = getpgid(self.pid_tunnels)
+            self.pgid_tunnels = getpgid(self.pid_tunnels)
         except OSError:
             pass
 
         return self.connection_info
 
     async def get_provisioner_info(self) -> Dict:
-        """Get information about this provisioner instance."""
-        self.log.info("`get_provisioner_info` called")
+        """
+        Get information about this provisioner instance.
+        NB this method was never called during the development of this provisioner.
+        """
         provisioner_info = await super().get_provisioner_info()
         provisioner_info.update(
             {
@@ -387,6 +442,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 "remote_kernel_name": self.remote_kernel_name,
                 "pid": self.pid,
                 "pgid": self.pgid,
+                "rem_pid": self.rem_pid,
                 "pid_tunnels": self.pid_tunnels,
                 "pgid_tunnels": self.pgid_tunnels,
                 "rem_conn_fp": self.rem_conn_fp,
@@ -396,14 +452,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         return provisioner_info
 
     async def load_provisioner_info(self, provisioner_info: Dict) -> None:
-        """Load information about this provisioner instance."""
-        self.log.info("`load_provisioner_info` called")
+        """
+        Load information about this provisioner instance.
+        NB this method was never called during the development of this provisioner.
+        """
         await super().load_provisioner_info(provisioner_info)
         self.ssh_host = provisioner_info["ssh_host"]
         self.remote_python_prefix = provisioner_info["remote_python_prefix"]
         self.remote_kernel_name = provisioner_info["remote_kernel_name"]
         self.pid = provisioner_info["pid"]
         self.pgid = provisioner_info["pgid"]
+        self.rem_pid = provisioner_info["rem_pid"]
         self.pid_tunnels = provisioner_info["pid_tunnels"]
         self.pgid_tunnels = provisioner_info["pgid_tunnels"]
         self.rem_conn_fp = provisioner_info["rem_conn_fp"]
@@ -411,7 +470,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     async def cleanup(self, restart: bool = False) -> None:
         """Clean up resources used by the provisioner."""
-        # Return cached ports if we're not restarting
         if self.ports_cached and not restart:
             lpc = LocalPortCache.instance()
             for k, port in self.connection_info.items():
@@ -419,18 +477,15 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     lpc.return_port(port)
             self.ports_cached = False
 
-        # TODO: kill remote jupyter process which should remove the connection file
-        # automatically
-
     @property
     def has_process(self) -> bool:
         """Returns true if this provisioner is currently managing a process."""
-        return self.process is not None
+        return self.process_tunnels is not None
 
     async def poll(self) -> Optional[int]:
         """Checks if kernel process is still running."""
-        if self.process:
-            return self.process.poll()
+        if self.process_tunnels:
+            return self.process_tunnels.poll()
         return 0
 
     async def _wait(self, process_attr_name: str):
@@ -447,37 +502,64 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         for attr in ["stdout", "stderr", "stdin"]:
             fid = getattr(process, attr)
             if fid:
-                fid.close()
+                try:
+                    fid.close()
+                except BrokenPipeError:
+                    self.log.debug(
+                        f"BrokenPipeError when closing {attr} for {process_attr_name}"
+                    )
         setattr(self, process_attr_name, None)
         return ret
 
     async def wait(self) -> Optional[int]:
         """Waits for processes to terminate."""
-        self.log.info("`wait` called")
+        self.log.info("Waiting for process(es) to terminate...")
         ret0, ret1 = await asyncio.gather(
             self._wait("process"),
             self._wait("process_tunnels"),
         )
+        self.log.info("Process(es) terminated.")
         return ret0 or ret1
 
     async def send_signal(self, signum: int) -> None:
-        """Sends signal identified by signum to the kernel process."""
-        self.log.info(f"`send_signal` called {signum = }")
-        # TODO: confirm is this applies to both our processes
-        for p in (self.process, self.process_tunnels):
-            if p:
-                p.send_signal(signum)
+        """
+        Sends signal identified by signum to the kernel process.
+        NB this method was never called during the development of this provisioner.
+        This is expected since we are using `"interrupt_mode": "message"` in our spec.
+        """
+        self.log.error(f"Unexpected `send_signal` call ({signum = })")
 
     async def kill(self, restart: bool = False) -> None:
-        """Kill the kernel process."""
-        self.log.info("`kill` called")
-        for p in (self.process, self.process_tunnels):
-            if p:
-                p.kill()
+        """
+        Kill the kernel process.
+        NB this method was never called during the development of this provisioner.
+        This is expected since we are using `"interrupt_mode": "message"` in our spec.
+
+        Update: this gets called if the remote process dies unexpectedly.
+        """
+        self.log.error(f"Unexpected `kill` call ({restart = })")
 
     async def terminate(self, restart: bool = False) -> None:
         """Terminates the kernel process."""
-        self.log.info("`terminate` called")
+        if self.rem_pid:
+            try:
+                # 15 is equivalent to SIGTERM
+                cmd = [self.ssh, "-q", self.ssh_host, f"kill -15 {self.rem_pid}"]
+                run(  # noqa: S603
+                    cmd,
+                    stdout=PIPE,
+                    stderr=PIPE,
+                    stdin=PIPE,
+                    check=True,
+                )  # type: ignore
+                self.log.info(f"Sent SIGTERM to remote process {self.rem_pid} ({cmd})")
+                self.rem_pid = None
+            except Exception as e:
+                self.log.exception(e)
+                self.log.error(
+                    f"Failed to terminate remote process PID={self.rem_pid}: {e}"
+                )
+
         for p in (self.process, self.process_tunnels):
             if p:
                 p.terminate()
