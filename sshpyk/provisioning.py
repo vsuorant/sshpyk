@@ -21,14 +21,27 @@ def _nope(*args, **kwargs):
     pass
 
 
+RGX_CONN_FP = re.compile(r"file: (.*\.json)")
+PID_PREFIX = "KERNEL_APP_PID="
+RGX_PID = re.compile(rf"{PID_PREFIX}(\d+)")
+REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
+# extracted from jupyter_client/kernelspec.py
+RGX_KERNEL_NAME = re.compile(r"^[a-z0-9._-]+$", re.IGNORECASE)
+RGX_SSH_HOST_ALIAS = re.compile(r"^[a-z0-9_-]+$", re.IGNORECASE)
+
 getpgid = getattr(os, "getpgid", _nope)
 
 
-class ASCII(Unicode):
+class SshHost(Unicode):
     def validate(self, obj, value):
         value = super().validate(obj, value)
         try:
-            value.encode("ascii")
+            if not RGX_SSH_HOST_ALIAS.match(value):
+                raise ValueError(
+                    f"Invalid SSH host alias {value!r}"
+                    + f"Must match this pattern {RGX_SSH_HOST_ALIAS.pattern}. "
+                    + "Verify that it is defined in your local SSH config file."
+                )
             return value
         except UnicodeEncodeError:
             self.error(obj, value)
@@ -45,10 +58,16 @@ class UnicodePath(Unicode):
             raise
 
 
-RGX_CONN_FP = re.compile(r"file: (.*\.json)")
-PID_PREFIX = "KERNEL_APP_PID="
-RGX_PID = re.compile(rf"{PID_PREFIX}(\d+)")
-REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
+class KernelName(Unicode):
+    def validate(self, obj, value):
+        # value = super().validate(obj, value) # not needed since we use regex
+        try:
+            if not RGX_KERNEL_NAME.match(value):
+                raise ValueError(f"Invalid kernel name {value!r}")
+            return value
+        except:
+            self.error(obj, value)
+            raise
 
 
 class SSHKernelProvisioner(KernelProvisionerBase):
@@ -59,9 +78,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     for kernel communication, and manages the lifecycle of the remote kernel.
     """
 
-    ssh_host = ASCII(
+    ssh_host_alias = SshHost(
         config=True,
-        help="Remote host to connect to",
+        help="Remote host alias to connect to. "
+        + "It must be defined in your local SSH config file.",
         allow_none=False,
     )
     remote_python_prefix = UnicodePath(
@@ -73,7 +93,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         + "It must have jupyter_client package installed.",
         allow_none=False,
     )
-    remote_kernel_name = UnicodePath(
+    remote_kernel_name = KernelName(
         config=True,
         help="Kernel name on the remote system "
         + "(i.e. first column of `jupyter kernelspec list` on the remote system).",
@@ -194,7 +214,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         try:
             # For details on the way the processes are spawned see the Popen call in
             # pre_launch().
-            cmd = [self.ssh, "-q", self.ssh_host, f"cat {self.rem_conn_fp!r}"]
+            cmd = [self.ssh, "-q", self.ssh_host_alias, f"cat {self.rem_conn_fp!r}"]
             self.log.info(f"Fetching remote connection file {cmd = }")
             result = run(  # noqa: S603
                 cmd,
@@ -227,7 +247,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         and later in launch_kernel() it sets up the SSH tunnels.
         """
         if (
-            not self.ssh_host
+            not self.ssh_host_alias
             or not self.remote_python_prefix
             or not self.remote_kernel_name
         ):
@@ -298,7 +318,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ssh,
             "-q",  # mute ssh output
             # "-t", # NB We don't need a pseudo-tty to be allocated.
-            self.ssh_host,
+            self.ssh_host_alias,
             rem_cmd,
         ]
         self.log.info(f"Local command: {cmd!r}")
@@ -400,7 +420,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             "-q",  # mute ssh output
             "-N",  # do nothing, i.e. maintain the tunnels alive
             *ssh_tunnels,  # ssh tunnels within the same command
-            self.ssh_host,
+            self.ssh_host_alias,
         ]
 
         # NOTE: in case of future bugs check if calling this is relevant for running our
@@ -448,7 +468,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         provisioner_info = await super().get_provisioner_info()
         provisioner_info.update(
             {
-                "ssh_host": self.ssh_host,
+                "ssh_host_alias": self.ssh_host_alias,
                 "remote_python_prefix": self.remote_python_prefix,
                 "remote_kernel_name": self.remote_kernel_name,
                 "pid": self.pid,
@@ -468,7 +488,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         NB this method was never called during the development of this provisioner.
         """
         await super().load_provisioner_info(provisioner_info)
-        self.ssh_host = provisioner_info["ssh_host"]
+        self.ssh_host_alias = provisioner_info["ssh_host_alias"]
         self.remote_python_prefix = provisioner_info["remote_python_prefix"]
         self.remote_kernel_name = provisioner_info["remote_kernel_name"]
         self.pid = provisioner_info["pid"]
@@ -555,7 +575,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if self.rem_pid:
             try:
                 # 15 is equivalent to SIGTERM
-                cmd = [self.ssh, "-q", self.ssh_host, f"kill -15 {self.rem_pid}"]
+                cmd = [self.ssh, "-q", self.ssh_host_alias, f"kill -15 {self.rem_pid}"]
                 run(  # noqa: S603
                     cmd,
                     stdout=PIPE,
