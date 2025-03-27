@@ -360,16 +360,15 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # These are the ports that the local kernel client will connect to.
             # These ports are SSH-forwarded to the remote kernel.
             lpc = LocalPortCache.instance()
-            km.shell_port = lpc.find_available_port(km.ip)
-            km.iopub_port = lpc.find_available_port(km.ip)
-            km.stdin_port = lpc.find_available_port(km.ip)
-            km.hb_port = lpc.find_available_port(km.ip)
-            km.control_port = lpc.find_available_port(km.ip)
+            for channel in ("shell", "iopub", "stdin", "hb", "control"):
+                setattr(km, channel + "_port", lpc.find_available_port(km.ip))
             self.ports_cached = True
 
         # Fill in the rest of the connection info based on the remote connection info
         rci = self.rem_conn_info
-        km.session.kernel_name = rci.get("kernel_name", "")
+        # NB don't override the local kernel name. Important for extra clarity on how
+        # and to which kernel we are connected.
+        # km.session.kernel_name = rci.get("kernel_name", "")
         km.transport = rci["transport"]
         km.session.signature_scheme = rci["signature_scheme"]
         key_prev = self.connection_info.get("key", None)
@@ -381,17 +380,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         _ = kwargs.pop("extra_arguments", [])  # bc LocalProvisioner does it
 
-        # if-else bc LocalProvisioner does it
+        # This if-else is here bc LocalProvisioner does it
         if "env" in kwargs:
             jupyter_session = kwargs["env"].get("JPY_SESSION_NAME", "")
             km.write_connection_file(jupyter_session=jupyter_session)
         else:
             km.write_connection_file()
 
-        if self.connection_info:
-            self.log.warning(f"Before: {self.connection_info = }")
         ci = self.connection_info = km.get_connection_info()
-        self.log.warning(f"After: {self.connection_info = }")
 
         # SSH tunnels between local and remote ports
         ssh_tunnels = []
@@ -407,10 +403,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ssh_host,
         ]
 
-        # NOTE: in case of future bugs check if calling this is relevant
+        # NOTE: in case of future bugs check if calling this is relevant for running our
+        # local commands
         # cmd = km.format_kernel_cmd(extra_arguments=extra_arguments)
 
-        # NB `cmd` arg is expected inside the KernelManager
+        # NB `cmd` arg is passed in bc it is expected inside the KernelManager
         return await super().pre_launch(cmd=cmd, **kwargs)
 
     async def launch_kernel(
