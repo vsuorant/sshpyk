@@ -48,6 +48,7 @@ class UnicodePath(Unicode):
 RGX_CONN_FP = re.compile(r"file: (.*\.json)")
 PID_PREFIX = "KERNEL_APP_PID="
 RGX_PID = re.compile(rf"{PID_PREFIX}(\d+)")
+REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
 
 
 class SSHKernelProvisioner(KernelProvisionerBase):
@@ -265,17 +266,22 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         #     if self._connection_file_written and os.path.exists(self.connection_file):
         #         return
         #     self.connection_file, cfg = write_connection_file(...)
-        # While self._connection_file_written has initial value as `False`.
+        # While self._connection_file_written has initial value set to `False`.
 
         if self.rem_conn_fp is not None:
             rem_args.append(f"--KernelManager.connection_file='{self.rem_conn_fp}'")
-            session_key_str = self.connection_info["key"].decode()
             # Simply specifying the connection file does not work due to the way the
             # remote KernelApp works.
-            # But this seems to do the trick of forcing the remote kernel to use the
+            # This does the trick of forcing the remote kernel to use the
             # provided key (which was generated when we started the remote kernel
             # for the first time).
-            rem_args.append(f"--ConnectionFileMixin.Session.key={session_key_str}")
+            # NOTE: if we input the session key directly here in plain text, then on
+            # the remote machine you can run e.g. `ps aux | grep jupyter-kernel`
+            # and see the key in plain text in the command. Instead of this we
+            # communicate it securely using the stdin pipe of the ssh process below.
+            rem_args.append(
+                f"--ConnectionFileMixin.Session.key=${REM_SESSION_KEY_NAME}"
+            )
 
         rem_cmd = " ".join(rem_args)
         # Use nohup to ensure the remote kernel is not killed is fully detached from the
@@ -285,6 +291,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # to some file on the remote systems and then run yet another ssh call to fetch
         # that file, potentially several times till the remote kernel has started.
         rem_cmd = f"exec nohup {rem_cmd} & echo {PID_PREFIX}$!"
+        if self.rem_conn_fp is not None:
+            rem_cmd = f"read {REM_SESSION_KEY_NAME} && " + rem_cmd
         self.log.info(f"Remote command: {rem_cmd!r}")
         cmd = [
             self.ssh,
@@ -309,6 +317,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # causing jupyter to try to launch them again, etc..
             start_new_session=True,
         )
+        if self.rem_conn_fp is not None:
+            # Communicate the session key to the `read {REM_SESSION_KEY_NAME}` command
+            # on the remote machine securely using the stdin pipe of the ssh
+            # process.
+            self.process.stdin.write(self.rem_conn_info["key"] + b"\n")
+            self.process.stdin.flush()
         # Close the input pipe, see launch_kernel in jupyter_client
         self.process.stdin.close()
 
@@ -552,7 +566,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     stdin=PIPE,
                     check=True,
                 )  # type: ignore
-                self.log.info(f"Sent SIGTERM to remote process {self.rem_pid} ({cmd})")
+                self.log.info(f"Sent SIGTERM to remote process {cmd = }")
                 self.rem_pid = None
             except Exception as e:
                 self.log.exception(e)
