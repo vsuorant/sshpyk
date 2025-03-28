@@ -147,9 +147,11 @@ Basic SSH Config Setup
 Your SSH configuration is typically stored in :code:`$HOME/.ssh/config`. A basic entry looks like::
 
   Host myserver
-    HostName 192.168.1.100
-    User myusername
-    Port 22
+    HostName 192.168.1.100 # IP address of the remote system
+    User myusername # your unix username on the remote system
+    Port 22 # this is the default
+    IdentityFile ~/.ssh/id_rsa # required for passwordless login
+    StrictHostKeyChecking no # optional, but recommended for automation
 
 With this configuration, you can use :code:`myserver` as your :code:`--ssh-host-alias` in sshpyk commands.
 
@@ -180,12 +182,21 @@ To set up passwordless SSH authentication:
 Advanced: Using Bastion Hosts
 ============================
 
-One powerful feature is the ability to connect to hosts behind a bastion (jump) server. For example::
+One powerful feature is the ability to connect to hosts behind a bastion (jump) server. For example in your SSH config::
 
-  Host internal-server
+  Host bastion
+    HostName bastion.example.com
+    User bastion-username
+    IdentityFile ~/.ssh/id_rsa_bastion # required for passwordless login
+    StrictHostKeyChecking no # optional, but recommended for automation
+
+  Host internal_server
+    HostName internal-server.example.com
     User remote-username
+    IdentityFile ~/.ssh/id_rsa_internal # required for passwordless login
     ForwardX11Trusted yes
-    ProxyCommand ssh bastion-username@bastion.example.com -W %h:%p
+    StrictHostKeyChecking no # optional, but recommended for automation
+    ProxyJump bastion # this is the key line that enables the "jump" through the bastion
 
 This configuration allows you to:
 
