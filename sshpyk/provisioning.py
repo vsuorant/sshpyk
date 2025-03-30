@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from shutil import which
 from subprocess import PIPE, Popen, run
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 from jupyter_client.connect import KernelConnectionInfo, LocalPortCache
 from jupyter_client.provisioning.provisioner_base import KernelProvisionerBase
@@ -120,11 +120,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     rem_conn_fp = None
     rem_conn_info = None
 
+    # These are defined bc the LocalProvisioner has them
     pid = None
     pgid = None
     pid_tunnels = None
     pgid_tunnels = None
-    rem_pid = None
+
+    rem_pid = None  # to be able to kill the remote process
 
     def li(self, msg: str, *args, **kwargs):
         self.log.info(f"{LOG_PREFIX}{msg}", *args, **kwargs)
@@ -139,9 +141,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.log.error(f"{LOG_PREFIX}{msg}", *args, **kwargs)
 
     # Use asyncio to read output with timeout
-    async def extract_connection_file_from_process_pipes(
-        self, timeout: int
-    ) -> Tuple[Optional[int], Optional[str]]:
+    async def extract_from_process_pipes(
+        self,
+        process: Popen,
+        line_handler: Callable[[str], bool],
+        timeout: int,
+        poll_interval: float = 0.1,
+    ):
         """
         When executing the `jupyter kernel --kernel=...` it prints (to stderr):
         ```
@@ -151,14 +157,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         """
         # Create a selector and register both stdout and stderr pipes to listen events
         selector = selectors.DefaultSelector()
-        selector.register(self.process.stdout, selectors.EVENT_READ, "stdout")
-        selector.register(self.process.stderr, selectors.EVENT_READ, "stderr")
-
-        remote_pid = conn_file_path = None
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
 
         t = time.time()
         while time.time() - t < timeout:
-            await asyncio.sleep(0.1)  # yield control back to event loop
+            await asyncio.sleep(poll_interval)  # yield control back to event loop
 
             # Check for available data on either pipe
             events = selector.select(timeout=0)
@@ -175,53 +179,63 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 if line_str:
                     # Log both stdout and stderr
                     self.li(f"Remote jupyter says ({pipe_name}): {line_str}")
-                    # Then information was output into the stderr, but check both
-                    match = RGX_PID.search(line_str)
-                    if match:
-                        remote_pid = int(match.group(1))
-                    match = RGX_CONN_FP.search(line_str)
-                    if match:
-                        conn_file_path = match.group(1)
-                    if remote_pid and conn_file_path:
-                        return remote_pid, conn_file_path
+
+                    done = line_handler(line_str)
+                    if done:
+                        self.ld("Line handler done.")
+                        return
 
             # If no pipes left to monitor or process ended, exit loop
-            if not selector.get_map() or self.process.poll() is not None:
-                return remote_pid, conn_file_path
+            if not selector.get_map() or process.poll() is not None:
+                return
 
         raise TimeoutError(timeout)
 
-    async def extract_connection_file(self, rem_cmd: str, timeout: int):
+    def extract_rem_info_handler(self, line: str):
+        """Coroutine to extract remote PID and connection file path."""
+        match = RGX_PID.search(line)
+        if match:
+            self.rem_pid = int(match.group(1))
+
+        match = RGX_CONN_FP.search(line)
+        if match:
+            self.rem_conn_fp = match.group(1)
+
+        if self.rem_pid and self.rem_conn_fp:
+            return True
+        return False
+
+    async def extract_rem_pid_and_connection_fp(self, rem_cmd: str, timeout: int):
         self.ld(
             f"Waiting for remote connection file path from {rem_cmd!r} ({timeout = })"
         )
         try:
-            rpid, rcf = await self.extract_connection_file_from_process_pipes(
-                timeout=timeout
+            await self.extract_from_process_pipes(
+                process=self.process,
+                line_handler=self.extract_rem_info_handler,
+                timeout=timeout,
             )
         except TimeoutError as e:
             msg = f"Timed out ({timeout}s) waiting for connection file information."
             self.le(msg)
             raise RuntimeError(msg) from e
 
-        if not rpid:
+        if not self.rem_pid:
             msg = f"Could not extract PID of remote process during {rem_cmd!r}"
             self.le(msg)
             raise RuntimeError(msg)
 
-        if not rcf:
+        if not self.rem_conn_fp:
             msg = f"Could not extract connection file path on remote during {rem_cmd!r}"
             self.le(msg)
             raise RuntimeError(msg)
 
         try:
-            Path(rcf)  # should raise if not valid
+            Path(self.rem_conn_fp)  # should raise if not valid
         except Exception as e:
-            msg = f"Unexpected remote connection file path {rcf}."
+            msg = f"Unexpected remote connection file path {self.rem_conn_fp}."
             self.le(msg)
             raise RuntimeError(msg) from e
-
-        return rpid, rcf
 
     def fetch_remote_connection_info(self) -> Dict[str, Any]:
         try:
@@ -364,72 +378,58 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         except OSError:
             pass
 
-        self.rem_pid, rcfp = await self.extract_connection_file(
+        # TODO: in case of exceptions, if possible, kill the remote process.
+        await self.extract_rem_pid_and_connection_fp(
             rem_cmd, timeout=self.remote_kernel_launch_timeout
         )
         self.li(f"Remote kernel launched, PID of remote KernelApp: {self.rem_pid}")
 
-        self.li(f"Connection file on remote machine: {rcfp}")
+        self.li(f"Connection file on remote machine: {self.rem_conn_fp}")
         # We are done with the starting the remote kernel. We know its PID to kill it
-        # later.
+        # later. Terminate the local process.
         self.process.terminate()
         await self._wait("process")
 
         if self.rem_conn_fp is None:
-            self.rem_conn_fp = rcfp
-        elif self.rem_conn_fp != rcfp:
-            raise RuntimeError(f"Unexpected remote connection file path {rcfp}.")
+            self.rem_conn_fp = self.rem_conn_fp
+        elif self.rem_conn_fp != self.rem_conn_fp:
+            raise RuntimeError(
+                f"Unexpected remote connection file path {self.rem_conn_fp}."
+            )
 
         # Always fetch the remote connection info to forward to the correct ports on
         # the remote system
         self.rem_conn_info = self.fetch_remote_connection_info()
         self.ld(f"Connection info remote: {self.rem_conn_info}")
 
+        # ##############################################################################
+        # Run the ssh command ASAP to minimize the chance of race condition on ports
+        # ##############################################################################
+
         # This part is inspired from LocalProvisioner.pre_launch where it seems to be
         # a temporary thing because the division of labor is not clear.
+        # NOTE: there is a race condition on ports (from other processes on the local
+        # machine), known issue: https://github.com/jupyter/jupyter_client/issues/487
+        ssh_tunnels = []  # SSH tunnels between local and remote ports
+        p_names = ("shell_port", "iopub_port", "stdin_port", "hb_port", "control_port")
+        if not km.cache_ports:
+            self.le(
+                f"Unexpected {km.cache_ports = }! Your system is likely not supported."
+            )
         if km.cache_ports and not self.ports_cached:
             # Find available ports on local machine for all channels.
             # These are the ports that the local kernel client will connect to.
             # These ports are SSH-forwarded to the remote kernel.
             lpc = LocalPortCache.instance()
-            for channel in ("shell", "iopub", "stdin", "hb", "control"):
-                setattr(km, channel + "_port", lpc.find_available_port(km.ip))
+            for port_name in p_names:
+                p = lpc.find_available_port(km.ip)
+                setattr(km, port_name, p)
+                ssh_tunnels += ["-L", f"{p}:localhost:{self.rem_conn_info[port_name]}"]
             self.ports_cached = True
-
-        # Fill in the rest of the connection info based on the remote connection info
-        rci = self.rem_conn_info
-        # NB don't override the local kernel name. Important for extra clarity on how
-        # and to which kernel we are connected.
-        # km.session.kernel_name = rci.get("kernel_name", "")
-        km.transport = rci["transport"]
-        km.session.signature_scheme = rci["signature_scheme"]
-        key_prev = self.connection_info.get("key", None)
-        key_new = rci["key"]
-        if key_prev and key_prev != key_new:
-            # Just in case on some combination of systems it does not work
-            self.le(f"Session key was not preserved ({key_prev=} vs {key_new=}")
-        km.session.key = key_new
-
-        _ = kwargs.pop("extra_arguments", [])  # bc LocalProvisioner does it
-
-        # This if-else is here bc LocalProvisioner does it
-        if "env" in kwargs:
-            jupyter_session = kwargs["env"].get("JPY_SESSION_NAME", "")
-            km.write_connection_file(jupyter_session=jupyter_session)
         else:
-            km.write_connection_file()
-        self.li(
-            f"Connection file on local machine: {Path(km.connection_file).absolute()}."
-        )
-
-        ci = self.connection_info = km.get_connection_info()
-        self.ld(f"Connection info local: {self.connection_info}")
-
-        # SSH tunnels between local and remote ports
-        ssh_tunnels = []
-        for key in rci:
-            if key.endswith("_port"):
-                ssh_tunnels += ["-L", f"{ci[key]}:localhost:{rci[key]}"]
+            for port_name in p_names:
+                p = getattr(km, port_name)  # use the cached ports
+                ssh_tunnels += ["-L", f"{p}:localhost:{self.rem_conn_info[port_name]}"]
 
         cmd = [
             self.ssh,
@@ -438,6 +438,22 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             *ssh_tunnels,  # ssh tunnels within the same command
             self.ssh_host_alias,
         ]
+
+        cmd_str = " ".join(cmd)
+        self.li(f"SSH-forwarding local ports to remote kernel ports: {cmd_str!r}")
+        # For details on the way the processes are spawned see the Popen call above
+        self.process_tunnels = Popen(  # noqa: S603
+            cmd,
+            stdout=PIPE,
+            stderr=PIPE,
+            stdin=PIPE,
+            start_new_session=True,
+        )
+        # Close the input pipe, see launch_kernel in jupyter_client
+        self.process_tunnels.stdin.close()
+        # ##############################################################################
+
+        _ = kwargs.pop("extra_arguments", [])  # bc LocalProvisioner does it
 
         # NOTE: in case of future bugs check if calling this is relevant for running our
         # local commands
@@ -450,20 +466,32 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self, cmd: List[str], **kwargs: Any
     ) -> KernelConnectionInfo:
         """Launch a kernel on the remote system via SSH."""
-        cmd_str = " ".join(cmd)
-        self.li(f"SSH-forwarding local ports to remote kernel ports: {cmd_str!r}")
+        # Fill in the rest of the connection info based on the remote connection info
+        km, rci = self.parent, self.rem_conn_info  # KernelManager
+        # NB don't override the local kernel name. Important for extra clarity on how
+        # and to which kernel we are connected.
+        # km.session.kernel_name = rci.get("kernel_name", "")
+        km.transport = rci["transport"]
+        km.session.signature_scheme = rci["signature_scheme"]
+        key_prev = self.connection_info.get("key", None)
+        key_new = rci["key"]
+        if key_prev and key_prev != key_new:
+            # Just in case on some combination of systems it does not work
+            self.le(f"Session key was not preserved ({key_prev=} vs {key_new=}")
+        km.session.key = key_new
 
-        # For details on the way the processes are spawned see the Popen call in
-        # pre_launch().
-        self.process_tunnels = Popen(  # noqa: S603
-            cmd,
-            stdout=PIPE,
-            stderr=PIPE,
-            stdin=PIPE,
-            start_new_session=True,
+        # This if-else is here bc LocalProvisioner does it
+        if "env" in kwargs:
+            jupyter_session = kwargs["env"].get("JPY_SESSION_NAME", "")
+            km.write_connection_file(jupyter_session=jupyter_session)
+        else:
+            km.write_connection_file()
+        self.li(
+            f"Connection file on local machine: {Path(km.connection_file).absolute()}."
         )
-        # Close the input pipe, see launch_kernel in jupyter_client
-        self.process_tunnels.stdin.close()
+
+        self.connection_info = km.get_connection_info()
+        self.ld(f"Connection info local: {self.connection_info}")
 
         self.pid_tunnels = self.process_tunnels.pid
         self.pgid_tunnels = None
