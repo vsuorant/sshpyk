@@ -103,7 +103,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         allow_none=False,
     )
     remote_kernel_launch_timeout = Integer(
-        default=60,
+        default_value=60,
         config=True,
         help="Timeout for launching the remote kernel through the ssh command.",
         allow_none=False,
