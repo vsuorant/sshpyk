@@ -18,6 +18,7 @@ GET_ALL_SPECS_PY = inline_script(
     (Path(__file__).parent / "get_all_specs.py").read_text()
 )
 
+SSHD_CONFIG = (Path(__file__).parent / "sshd_config").read_text()
 
 LAUNCH_TIMEOUT = 15
 SHUTDOWN_TIME = 15

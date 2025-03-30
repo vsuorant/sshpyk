@@ -1,10 +1,12 @@
 """SSH Kernel Provisioner implementation for Jupyter Client."""
 
 import asyncio
+import getpass
 import json
 import re
 import subprocess
 from enum import Enum, unique
+from functools import partial
 from itertools import dropwhile
 from pathlib import Path
 from signal import SIGINT, SIGKILL, SIGTERM
@@ -13,12 +15,15 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from jupyter_client.connect import KernelConnectionInfo, LocalPortCache
 from jupyter_client.provisioning.provisioner_base import KernelProvisionerBase
 from jupyter_client.session import new_id_bytes
-from traitlets import Integer, Unicode
+from traitlets import Bool, Integer, Unicode
+from traitlets import List as TraitletsList
+from traitlets import Tuple as TraitletsTuple
 
 from .utils import (
     LAUNCH_TIMEOUT,
     RGX_UNAME_PREFIX,
     SHUTDOWN_TIME,
+    SSHD_CONFIG,
     UNAME_PREFIX,
     verify_local_ssh,
 )
@@ -40,6 +45,15 @@ REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
 RGX_KERNEL_NAME = re.compile(r"^[a-z0-9._-]+$", re.IGNORECASE)
 RGX_SSH_HOST_ALIAS = re.compile(r"^[a-z0-9_-]+$", re.IGNORECASE)
 
+# E.g. Allocated port 52497 for remote forward to localhost:22
+RGX_SSH_REMOTE_FORWARD_PORT = re.compile(r"Allocated port (\d+) for remote forward")
+PID_PREFIX_SSHFS = "SSHFS_PID"
+RGX_PID_SSHFS = re.compile(rf"{PID_PREFIX_SSHFS}=(\d+)")
+# E.g. Server listening on :: port 52497.
+# E.g. Server listening on 127.0.0.1 port 52497.
+# NOTE: there should be both the IPv4 and IPv6 addresses printed in the sshd output
+# In any case it is more general to catch either of them.
+RGX_SSHD_DONE = re.compile(r"listening on .+ port (\d+)")
 
 PNAMES = ("shell_port", "iopub_port", "stdin_port", "hb_port", "control_port")
 
@@ -149,6 +163,46 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         allow_none=True,
         default_value=None,
     )
+    remote_sshfs = UnicodePath(
+        config=True,
+        help="Path to sshfs executable on remote system. "
+        "If provided, enables mounting local directories on the remote system.",
+        allow_none=True,
+        default_value=None,
+    )
+    ssh_host_alias_local_on_remote = SshHost(
+        config=True,
+        help="SSH host alias on the remote system that points back to the local system."
+        " It must be defined in the remote SSH config file. "
+        "Required for sshfs mounting.",
+        allow_none=True,
+        default_value=None,
+    )
+    mount_local_on_remote = TraitletsList(
+        trait=TraitletsTuple(UnicodePath(), UnicodePath(), Unicode()),
+        config=True,
+        help="List of local-remote directory pairs to mount from local to remote using "
+        "the sshfs command on remote. "
+        "Each item is a pair of [local_path, remote_path, sshfs_options].",
+        default_value=[],
+        allow_none=True,
+    )
+    sshd = Unicode(
+        config=True,
+        help="Path to SSHD executable. "
+        "If None, will be auto-detected using 'which sshd'. "
+        "Only required when using sshfs on remote.",
+        allow_none=True,
+        default_value=None,
+    )
+    sshfs_enabled = Bool(
+        config=True,
+        help="Enable/disable SSHFS mounting of local directories on the remote system. "
+        "If False, SSHFS mounting will be disabled even if other SSHFS-related options "
+        "are present in the config.",
+        allow_none=True,
+        default_value=None,
+    )
 
     restart_requested = False
     log_prefix = ""
@@ -178,6 +232,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     rem_pid_k = None  # to be able to monitor and kill the remote kernel process
 
     rem_proc_cmds = None
+
+    ports_sshd_cached = False
+    pid_sshfs_tunnels = None
+    rem_sshfs_pids = None  # to be able to kill the remote sshfs processes
+    rem_sshfs_ports = None
+    sshd_pids = None
+    sshd_ports = None
 
     def li(self, msg: str, *args, **kwargs):
         self.log.info(f"{self.log_prefix}{msg}", *args, **kwargs)
@@ -408,6 +469,43 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.le(msg)
             raise RuntimeError(msg) from e
 
+    def extract_reverse_tunnel_port_handler(self, line: str, key: Tuple[str, str]):
+        """Handler to extract the dynamically assigned port for the reverse tunnel."""
+        match = RGX_SSH_REMOTE_FORWARD_PORT.search(line)
+        if match:
+            # Requires some care since the function will be called several times for
+            # each line in the ssh output.
+            port = int(match.group(1))
+            self.ld(
+                f"Reverse tunnel port for {key!r}: {port}, {self.rem_sshfs_ports = }"
+            )
+            if port not in self.rem_sshfs_ports.values():
+                self.rem_sshfs_ports[key] = port
+                return True
+        return False
+
+    async def extract_reverse_tunnels_ports(
+        self, process: subprocess.Popen, cmd: List[str]
+    ):
+        """Extract the dynamically assigned port(s) for the reverse tunnels."""
+        self.ld(f"Waiting for reverse tunnel(s) port(s) from {cmd = }")
+        try:
+            future = self.extract_from_process_pipes(
+                process=process,
+                line_handlers=[
+                    partial(self.extract_reverse_tunnel_port_handler, key=key)
+                    for key in self.sshd_ports
+                ],
+            )
+            await asyncio.wait_for(future, timeout=self.launch_timeout)
+        except asyncio.TimeoutError as e:
+            msg = (
+                f"Timed out waiting {self.launch_timeout}s for ssh reverse tunnel "
+                "port(s)."
+            )
+            self.le(msg)
+            raise RuntimeError(msg) from e
+
     def pick_kernel_local_ports(self):
         """Find available ports on local machine for all kernel channels."""
         km = self.parent  # KernelManager
@@ -437,6 +535,16 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 setattr(km, port_name, p)
             self.ports_cached = True
 
+    def pick_sshd_local_ports(self):
+        """Find available ports for SSHD reverse tunnels."""
+        km = self.parent
+        if not self.ports_sshd_cached:
+            lpc = LocalPortCache.instance()
+            for local_dir, rem_dir, _ in self.mount_local_on_remote:
+                local_port = lpc.find_available_port(km.ip)
+                self.sshd_ports[(local_dir, rem_dir)] = local_port
+            self.ports_sshd_cached = True
+
     def make_kernel_tunnels_args(self) -> List[List[str]]:
         """Create SSH tunnel arguments for kernel communication."""
         if not self.rem_conn_info:
@@ -446,6 +554,19 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             local_port = getattr(km, port_name)
             remote_port = self.rem_conn_info[port_name]
             tunnels += ["-L", f"{local_port}:localhost:{remote_port}"]
+        return tunnels
+
+    def make_sshfs_tunnels_args(self) -> List[List[str]]:
+        """Create SSH tunnel arguments for SSHFS reverse tunnels."""
+        tunnels, km = [], self.parent
+        for (_local_dir, _rem_dir), local_port in self.sshd_ports.items():
+            # Add reverse tunnel from remote to local SSH port to allow the remote sshfs
+            # command to instruct the local ssh server to launch the sftp-server.
+            # The `:0:` ensures no race conditions on ports on the remote machine.
+            # But we have to read the allocated port from the ssh output.
+            # `localhost:` is to ensure this port is only accessible from the remote
+            # machine itself, for security.
+            tunnels += ["-R", f"localhost:0:{km.ip}:{local_port}"]
         return tunnels
 
     def load_connection_file(self):
@@ -477,6 +598,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self._cleanup_lock = asyncio.Lock()
         self._launch_lock = asyncio.Lock()
         self._ensure_tunnels_lock = asyncio.Lock()
+
         self.log_prefix = f"[{LOG_NAME}{str(id(self))[-3:]}] "
         k_conf = self.ssh_host_alias, self.remote_python_prefix, self.remote_kernel_name
         if not all(k_conf):
@@ -488,10 +610,51 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if self.popen_procs is None:
             self.popen_procs: Dict[int, subprocess.Popen] = {}  # Dict[pid, Popen]
         if self.rem_proc_cmds is None:
-            self.rem_proc_cmds: Dict[int, str] = {}  # Dict[pid, cmd]
+            # Dict[pid, cmd]
+            self.rem_proc_cmds: Dict[int, str] = {}
+        if self.rem_sshfs_pids is None:
+            # Dict[(local_dir, remote_dir), pid]
+            self.rem_sshfs_pids: Dict[Tuple[str, str], int] = {}
+        if self.sshd_ports is None:
+            # Dict[(local_dir, remote_dir), port]
+            self.sshd_ports: Dict[Tuple[str, str], int] = {}
+        if self.rem_sshfs_ports is None:
+            # Dict[(local_dir, remote_dir), port]
+            self.rem_sshfs_ports: Dict[Tuple[str, str], int] = {}
 
         # Auto-detect SSH executable if not specified, verify by calling it
         self.ssh = verify_local_ssh(self.ssh, self.log, "ssh", self.log_prefix)
+
+        sshfs_conf = (
+            self.remote_sshfs,
+            self.ssh_host_alias_local_on_remote,
+            self.mount_local_on_remote,
+        )
+        self.ld(f"{self.mount_local_on_remote = }")
+
+        # If self.sshfs_enabled is None at this point it means it is not present in the
+        # config.
+        if self.sshfs_enabled and not all(sshfs_conf):
+            self.lw(
+                "Incomplete configuration for remote sshfs. "
+                "If you want to mount local directories on the remote system, "
+                "you must provide all of the following: "
+                f"{self.remote_sshfs = }, "
+                f"{self.ssh_host_alias_local_on_remote = }, "
+                f"{self.mount_local_on_remote = }. Skipping."
+            )
+        elif self.sshfs_enabled and all(sshfs_conf):
+            try:
+                self.sshd = verify_local_ssh(
+                    self.sshd, self.log, "sshd", self.log_prefix
+                )
+            except EnvironmentError:
+                self.sshfs_enabled = False
+                self.sshd = None
+                self.le(
+                    "Local sshd executable not found. "
+                    "Cannot mount local directories on the remote system."
+                )
 
         if self.parent is None:
             raise RuntimeError("Parent KernelManager not set")
@@ -653,7 +816,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
         self.rem_proc_cmds = {pid: info["cmd"] for pid, info in proc_info.items()}
 
-        await self.ensure_tunnels(["pid_kernel_tunnels"])
+        await self.ensure_tunnels()
 
         _ = kwargs.pop("extra_arguments", [])  # bc LocalProvisioner does it
 
@@ -716,6 +879,40 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         process.stdin.close()
         self.li(f"SSH tunnels for kernel ports launched, PID={process.pid}")
 
+    async def open_sshfs_reverse_tunnels(self) -> None:
+        """Open SSH reverse tunnels for SSHFS."""
+        if not self.sshfs_enabled:
+            return
+        if not self.restart_requested:
+            self.pick_sshd_local_ports()
+        sshfs_tunnels = self.make_sshfs_tunnels_args()
+        if not sshfs_tunnels:  # just in case
+            return
+        cmd = [
+            self.ssh,
+            # ! Don't mute ssh, required for reading the reverse tunnel port(s)
+            "-N",  # do nothing, i.e. maintain the tunnels alive
+            *sshfs_tunnels,  # ssh tunnels within the same command
+            self.ssh_host_alias,
+        ]
+        self.ld(f"Setting up SSHFS tunnels {cmd = }")
+        process = subprocess.Popen(  # noqa: S603
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE,
+            start_new_session=True,
+            bufsize=1,
+            universal_newlines=True,
+        )
+        self.pid_sshfs_tunnels = process.pid
+        self.popen_procs[process.pid] = process
+        process.stdin.close()
+        self.li(f"SSHFS tunnels launched, PID={process.pid}")
+
+        self.rem_sshfs_ports = {}
+        await self.extract_reverse_tunnels_ports(process, cmd)
+
     async def launch_kernel(
         self, cmd: List[str], **kwargs: Any
     ) -> KernelConnectionInfo:
@@ -755,6 +952,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.connection_info = km.get_connection_info()
         self.ld(f"Connection info local: {self.connection_info}")
 
+        if self.sshfs_enabled and not self.restart_requested:
+            await self.launch_sshd_processes()
+            await self.sshfs_mount_local_on_remote()
+
         self.li("Done launching kernel")  # just to signal everything should be ready
         return self.connection_info
 
@@ -781,6 +982,145 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # See https://github.com/jupyter/jupyter_client/issues/1061 for details.
         self.restart_requested = restart
         self.li(f"shutdown_requested({restart = })")
+
+    def extract_sshfs_pid_handler(self, line: str, out: dict, key: Tuple[str, str]):
+        match = RGX_PID_SSHFS.search(line)
+        if match:
+            out[key] = int(match.group(1))
+            return True
+        return False
+
+    def extract_sshd_done_handler(self, line: str, port: int):
+        match = RGX_SSHD_DONE.search(line)
+        if match and int(match.group(1)) == port:
+            return True
+        return False
+
+    async def launch_sshd_processes(self) -> None:
+        """
+        Launch the sshd processes on the local machine.
+
+        NOTE: this is designed with the least privilege principle in mind! As a reminder
+        any user on the remote system can attempt to connect to ports on the remote
+        machine. Therefore, opening ports on the remote machine should be done with
+        care. The approach below is designed to only allow SFTP access to a specific
+        directory on the local machine through an authenticated SSH connection.
+        """
+        if self.sshd_pids is None:
+            self.sshd_pids = set()  # clear just in case
+        for (local_dir, _), local_port in self.sshd_ports.items():
+            # `-e` is less verbose than `-d`
+            # `-D` is to prevent sshd from detaching and becoming a daemon
+            # `-f /dev/stdin` is to read the config from stdin
+            # NB the rest of the config is in the SSHD_CONFIG
+            cmd = [
+                self.sshd,
+                "-D",
+                "-e",
+                "-f",
+                "/dev/stdin",
+            ]
+            self.ld(f"Local command {cmd = }")
+            process = subprocess.Popen(  # noqa: S603
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE,
+                start_new_session=True,
+                bufsize=1,
+                universal_newlines=True,
+            )
+            self.sshd_pids.add(process.pid)
+            self.popen_procs[process.pid] = process
+            process.stdin.write(
+                SSHD_CONFIG.format(
+                    local_dir=local_dir, user=getpass.getuser(), port=local_port
+                )
+            )
+            process.stdin.flush()
+            # Close the input pipe, see launch_kernel in jupyter_client
+            # Also required to signal sshd the EOF
+            process.stdin.close()
+            # Wait to be sure the sshd process is ready to accept incoming connections
+            line_handler = partial(self.extract_sshd_done_handler, port=local_port)
+            future = self.extract_from_process_pipes(
+                process=process, line_handlers=[line_handler]
+            )
+            try:
+                await asyncio.wait_for(future, timeout=self.launch_timeout)
+            except asyncio.TimeoutError:
+                self.le(f"Timed out waiting {self.launch_timeout}s for sshd {cmd = !r}")
+            self.li(
+                f"Launched local sshd process for mounting {local_dir!r}, "
+                f"PID={process.pid}"
+            )
+
+    async def sshfs_mount_local_on_remote(self) -> None:
+        """Mount the local directory(ies) on the remote using sshfs."""
+        for local_dir, rem_dir, sshfs_options in self.mount_local_on_remote:
+            remote_port = self.rem_sshfs_ports[(local_dir, rem_dir)]
+            self.ld(
+                f"Mounting {local_dir!r} on remote at {rem_dir!r} ({remote_port = })"
+            )
+            # Allow custom sshfs options per mount, e.g. "allow_other,follow_symlinks"
+            options = ["-o", sshfs_options] if sshfs_options else []
+            # Make the dir on the remote to avoid error handling.
+            # NB sshfs by default won't allow other users on the remote system to access
+            # the mounted directory.
+            cmd = [
+                "mkdir",
+                "-p",
+                rem_dir,
+                "&&",
+                f"echo {PID_PREFIX_SSHFS}=$$;",  # to extract the PID
+                f"exec {self.remote_sshfs}",
+                "-p",
+                str(remote_port),
+                *options,
+                f"{self.ssh_host_alias_local_on_remote}:",
+                rem_dir,
+            ]
+            self.ld(f"Remote command {cmd = }")
+            cmd_str = " ".join(cmd)
+            cmd = [
+                self.ssh,
+                "-q",
+                self.ssh_host_alias,
+                cmd_str,
+            ]
+            self.ld(f"Local command {cmd = }")
+            process = subprocess.Popen(  # noqa: S603
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE,
+                start_new_session=True,
+                bufsize=1,
+                universal_newlines=True,
+            )
+            self.popen_procs[process.pid] = process
+            # Close the input pipe, see launch_kernel in jupyter_client
+            process.stdin.close()
+            key = (local_dir, rem_dir)
+            line_handler = partial(
+                self.extract_sshfs_pid_handler, out=self.rem_sshfs_pids, key=key
+            )
+            future = self.extract_from_process_pipes(
+                process=process, line_handlers=[line_handler]
+            )
+            try:
+                await asyncio.wait_for(future, timeout=self.launch_timeout)
+            except asyncio.TimeoutError:
+                self.le(f"Timed out waiting {self.launch_timeout}s for {cmd = !r}")
+            rpid = self.rem_sshfs_pids[key]
+            if rpid == 0:
+                self.le(
+                    f"Failed to launch remote sshfs to mount {key[0]!r} on {key[1]!r}"
+                )
+                del self.rem_sshfs_pids[key]
+            else:
+                self.li(f"Mounted {key[0]!r} on {key[1]!r}, RPID={rpid}")
+            await self.terminate_popen(process)
 
     async def get_provisioner_info(self) -> Dict:
         """
@@ -825,10 +1165,19 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             for k, port in self.connection_info.items():
                 if k.endswith("_port"):
                     lpc.return_port(int(port))  # `int` to ensure type is correct
+            for port in self.sshd_ports.values():
+                lpc.return_port(port)
             self.ports_cached = False
 
         self.ld(f"Terminating local process(es) ({restart = })")
-        for _pid, p in list(self.popen_procs.items()):
+        for pid, p in list(self.popen_procs.items()):
+            # Don't terminate SSHFS-related processes if we are restarting
+            if restart:
+                if pid == self.pid_sshfs_tunnels:
+                    continue
+                elif self.sshd_pids and pid in self.sshd_pids:
+                    continue
+            # Only terminate kernel-related processes (including kernel tunnels)
             await self.terminate_popen(p)
         self.ld(f"Local process(es) terminated ({restart = })")
 
@@ -858,7 +1207,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     f"Timeout for remote KernelApp to terminate after SIGKILL, "
                     f"RPID={self.rem_pid_ka}. Ignoring."
                 )
-        self.li(f"Cleanup done ({restart = })")
 
         if self.rem_pid_ka:
             self.lw(f"Remote KernelApp RPID={self.rem_pid_ka} was likely not killed")
@@ -867,6 +1215,15 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if self.rem_pid_k:
             self.lw(f"Remote kernel RPID={self.rem_pid_k} was likely not killed")
             self.rem_pid_k = None
+
+        if self.sshfs_enabled and not restart:
+            for local_dir, rem_dir in tuple(self.rem_sshfs_pids):
+                await self.unmount_sshfs(rem_dir)
+                # * After unmounting, the remote sshfs process should terminate on its
+                # * own, so killing the remote sshfs processes should not be needed.
+                del self.rem_sshfs_pids[(local_dir, rem_dir)]
+
+        self.li(f"Cleanup done ({restart = })")
 
     async def cleanup(self, restart: bool = False) -> None:
         async with self._cleanup_lock:  # type: ignore
@@ -991,12 +1348,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     async def _ensure_tunnels(self, pid_attr_name: str):
         """
         Intended to cover temporary network disconnection upon which the `ssh` commands
-        fail and the tunnels process dies.
+        fail and the tunnels processes dies.
         """
-        if pid_attr_name != "pid_kernel_tunnels":
-            # TODO: adapt for SSHFS tunnels
-            raise NotImplementedError(f"Invalid {pid_attr_name = }")
-
         pid_tunnels = getattr(self, pid_attr_name)
         if not pid_tunnels:
             self.ld(f"{pid_attr_name} = {pid_tunnels}")
@@ -1020,15 +1373,16 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ld(f"Tunnels process PID={pid_tunnels} not running, (re)opening")
             if pid_attr_name == "pid_kernel_tunnels":
                 self.open_kernel_tunnels()
+            elif pid_attr_name == "pid_sshfs_tunnels" and self.sshfs_enabled:
+                await self.open_sshfs_reverse_tunnels()
 
-    async def ensure_tunnels(self, pid_attr_names: List[str]):
-        """
-        Ensure the tunnels process is running.
-        """
+    async def ensure_tunnels(self):
+        """Ensure the tunnels processes are running."""
+        attrs = ["pid_kernel_tunnels"]
+        if self.sshfs_enabled:
+            attrs.append("pid_sshfs_tunnels")
         async with self._ensure_tunnels_lock:  # type: ignore
-            futures = [
-                self._ensure_tunnels(pid_attr_name) for pid_attr_name in pid_attr_names
-            ]
+            futures = [self._ensure_tunnels(pid_attr_name) for pid_attr_name in attrs]
             await asyncio.gather(*futures)
 
     async def _poll(self) -> Optional[int]:
@@ -1050,8 +1404,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             return None  # assume all good
 
         if not self.parent.shutting_down:  # type: ignore
-            # Check if tunnels process is still running, if not reopen it.
-            await self.ensure_tunnels(["pid_kernel_tunnels"])
+            # Check if tunnels processes are still running, if not reopen.
+            await self.ensure_tunnels()
 
         # ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         # ! Safeguard against shutting down state change during await. This problem was
@@ -1105,6 +1459,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             del self.popen_procs[process.pid]
         if process.pid == self.pid_kernel_tunnels:
             self.pid_kernel_tunnels = None
+        if process.pid == self.pid_sshfs_tunnels:
+            self.pid_sshfs_tunnels = None
+        if self.sshd_pids and process.pid in self.sshd_pids:
+            self.sshd_pids.remove(process.pid)
         return ret
 
     async def wait_remote(
@@ -1177,6 +1535,37 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.lw(f"kill({restart = })")
         if self.rem_pid_k:
             await self.send_sigterm_to_remote(self.rem_pid_k, SIGKILL)
+
+    async def unmount_sshfs(self, mount_point: str) -> None:
+        """Unmount the local directory(ies) on the remote."""
+        # TODO should we use the `--lazy` option? and/or the `-f` (force) option?
+        if self.rem_sys_name == "Darwin":
+            cmd = ["umount", mount_point]
+        else:
+            cmd = ["fusermount", "-u", mount_point]  # ! Not tested
+        self.ld(f"Remote command {cmd = }")
+        cmd = [self.ssh, "-q", self.ssh_host_alias, " ".join(cmd)]
+        self.ld(f"Local command {cmd = }")
+        try:
+            proc = await asyncio.create_subprocess_exec(  # noqa: S603
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )  # type: ignore
+            std_out, _std_err = await proc.communicate()
+            output = std_out.decode().strip()
+            if proc.returncode != 0:
+                self.le(
+                    f"Failed to unmount {mount_point!r} on remote, "
+                    f"{proc.returncode = }. Output: {output!r}"
+                )
+            else:
+                self.li(f"Unmounted {mount_point!r} on remote")
+        except Exception as e:
+            self.log.exception(e)
+            self.lw(f"Failed to unmount {mount_point!r} on remote: {e}")
 
     async def send_signal_to_remote_process(self, pid: int, signum: int) -> RProcResult:
         if pid is None:  # to protect development mistakes

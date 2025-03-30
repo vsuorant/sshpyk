@@ -1,0 +1,46 @@
+# WARNING: this config is specifically designed to provide ONLY SFTP access to a
+# specific directory.
+# For security reasons, it follows the principle of least privilege. E.g. we don't
+# trust the other user on the remote machine.
+
+# internal-sftp (vs of a libexec sftp-server) avoids an extra process being spawned
+Subsystem sftp internal-sftp
+
+# These are dynamic and will be formatted from python before a pipe to sshd
+# Only allow SFTP for a specific dir
+ForceCommand internal-sftp -d {local_dir}
+Port {port}
+AllowUsers {user}
+
+# Restrict to key-based authentication only
+PasswordAuthentication no
+ChallengeResponseAuthentication no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PermitEmptyPasswords no
+PermitRootLogin no
+
+# We can't use this because the parent dir must be owned by root
+# ChrootDirectory /path/to/some_local_dir
+
+# Restrict SSH features, several are already the default, but just in case
+X11Forwarding no
+AllowTcpForwarding no
+AllowAgentForwarding no
+PermitTunnel no
+GatewayPorts no
+PermitOpen none
+AllowStreamLocalForwarding no
+PermitUserRC no
+PermitTTY no
+PermitUserEnvironment no
+UseDNS no
+StrictModes yes
+IgnoreRhosts yes
+HostbasedAuthentication no
+UsePAM no
+
+# Restrict SSH protocol features
+MaxSessions 1
+MaxStartups 1:50:2
+LoginGraceTime 15

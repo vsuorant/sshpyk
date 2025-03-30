@@ -66,6 +66,18 @@ See `Adding a Remote Kernel`_ for all available options.
 
 6. Your code now runs on the remote server and your local notebook interfaces with it!
 
+7. (Optional) It might be useful to mount a local directory on the remote system (replace values with your configuration):
+
+.. code-block:: bash
+
+    sshpyk edit --kernel-name ssh_remote_python3 \
+                --remote-sshfs /usr/bin/sshfs \
+                --ssh-host-alias-local-on-remote local_on_remote_ssh_host_alias \
+                --mount-local-on-remote "/local/project:/remote/mount"
+
+See `Advanced: Using SSHFS Mounting`_ for details on mounting local directories on the
+remote system.
+
 Installation
 ************
 
@@ -127,38 +139,44 @@ You can list all available kernels using the ``list`` command:
     --no-check, -n  Skip remote kernel checks
 
   $ sshpyk list
-  ---- Local Kernel ----
-  Name:                  f310
-  Display Name:          Python 3.10
-  Resource Dir:          /Users/victor/Library/Jupyter/kernels/f310
-  Command:               /opt/homebrew/anaconda3/envs/f310/bin/python -m ipykernel_launcher -f {connection_file}
-  Language:              python
-  Interrupt Mode:        signal
+  ----- Local Kernel ------
+  Name:                     f310
+  Display Name:             Python 3.10
+  Resource Dir:             /Users/victor/Library/Jupyter/kernels/f310
+  Command:                  /opt/homebrew/anaconda3/envs/f310/bin/python -m ipykernel_launcher -f {connection_file}
+  Language:                 python
+  Interrupt Mode:           signal
 
-  ---- Local Kernel ----
-  Name:                  ir
-  Display Name:          R
-  Resource Dir:          /opt/homebrew/anaconda3/envs/g/share/jupyter/kernels/ir
-  Command:               R --slave -e IRkernel::main() --args {connection_file}
-  Language:              R
-  Interrupt Mode:        signal
+  ----- Local Kernel ------
+  Name:                     ir
+  Display Name:             R
+  Resource Dir:             /opt/homebrew/anaconda3/envs/g/share/jupyter/kernels/ir
+  Command:                  R --slave -e IRkernel::main() --args {connection_file}
+  Language:                 R
+  Interrupt Mode:           signal
 
-  ----- SSH Kernel -----
-  Name:                  ssh_mbp_ext
-  Display Name:          Python 3.13 (Remote MBP)
-  Resource Dir:          /Users/victor/Library/Jupyter/kernels/ssh_mbp_ext
-  Command (simplified):  ssh mbp_ext jupyter-kernel --KernelApp.kernel_name=python3 ...
-  Language:              python
-  Interrupt Mode:        (v) message
-  SSH Host Alias:        (v) mbp_ext
-  SSH Path:              (v) /opt/homebrew/bin/ssh
-  Remote System:         Darwin MacBook-Pro 22.6.0 Darwin Kernel Version 22.6.0: Thu Dec  5 23:40:09 PST 2024; root:xnu-8796.141.3.709.7~4/RELEASE_ARM64_T6000 arm64
-  Remote Interrupt Mode: signal
-  Remote Python Prefix:  (v) /opt/homebrew/anaconda3/envs/g
-  Remote Kernel Name:    (v) python3
-  Launch Timeout:        15
-  Shutdown Timeout:      15
-  Remote Command:        python -m ipykernel_launcher -f {connection_file}
+  ------ SSH Kernel -------
+  Name:                     ssh_mbp_ext
+  Display Name:             Python 3.13 (RMBP+SSHFS)
+  Resource Dir:             /Users/victor/Library/Jupyter/kernels/ssh_mbp_ext
+  Command (simplified):     ssh mbp_ext jupyter-kernel --KernelApp.kernel_name=python3 ...
+  Language:                 python
+  Interrupt Mode:           (v) message
+  SSH Host Alias:           (v) mbp_ext
+  SSH Path:                 (v) /opt/homebrew/bin/ssh
+  Remote System:            Darwin MacBook-Pro 22.6.0 Darwin Kernel Version 22.6.0: Thu Dec  5 23:40:09 PST 2024; root:xnu-8796.141.3.709.7~4/RELEASE_ARM64_T6000 arm64
+  Remote Interrupt Mode:    signal
+  Remote Python Prefix:     (v) /opt/homebrew/anaconda3/envs/g
+  Remote Kernel Name:       (v) python3
+  Launch Timeout:           15
+  Shutdown Timeout:         15
+  Remote Command:           python -m ipykernel_launcher -f {connection_file}
+  SSHFS Mounting:           Enabled
+  SSHD Path:                (v) /opt/homebrew/sbin/sshd
+  Remote SSHFS:             (v) /usr/local/bin/sshfs
+  SSH Host Alias Reverse:   local_on_remote
+  Mount Point (simplified): sshfs local_on_remote:/path/to/remote_dir /path/to/local_dir ...
+                            sshfs local_on_remote:/path/to/remote_dir2 /path/to/local_dir2 ...
 
 Adding a Remote Kernel
 ======================
@@ -362,6 +380,95 @@ and the SSH tunneling will be handled automatically according to your SSH ``conf
 
 💡 Tip
   You can of course have as many bastion hosts between you and the remote server as you want.
+
+Advanced: Using SSHFS Mounting
+==============================
+
+``sshpyk`` supports mounting local directories on the remote system using SSHFS,
+which allows seamless file sharing between your local and remote environments. For this
+to work, your user on the remote system must be authorized to ssh into your local machine
+using SSH key authentication.
+``sshpyk`` will setup reverse tunnels and run ``sshfs`` command on the remote system
+to mount the local directories. For security reasons, ``sshpyk`` will only allow SFTP
+access to the mounted directories.
+
+Requirements
+------------
+
+To use SSHFS mounting:
+
+1. SSHFS must be installed on the remote system. This is a user space program so you should be able to install it without admin privileges.
+2. SSH daemon command (``sshd``) must be available on the local system. Usually it is available if you already have SSH available.
+3. The remote system must have an SSH config entry that points back to your local machine.
+
+
+Configuration
+-------------
+
+When adding or editing a kernel with SSHFS support, you need to specify:
+
+* ``--remote-sshfs`` - Path to the sshfs executable on the remote system
+* ``--ssh-host-alias-local-on-remote`` - SSH host alias on the remote system that points to your local machine
+* ``--mount-local-on-remote`` - Directory pairs to mount, in format: ``/local/path:/remote/path[:sshfs_options]``
+
+Example Setup
+-------------
+
+1. On the remote system, add an entry to ``~/.ssh/config`` that points back to your local machine
+
+.. code-block:: text
+
+  Host local_machine_on_remote
+    # Keep this to `localhost`
+    HostName localhost
+    # Edit this to match your local username
+    User your_local_username
+    # Edit this to match a private key on the remote system
+    # that is authorized on your local machine
+    IdentityFile ~/.ssh/id_rsa_authorized_to_ssh_into_your_local_machine
+    StrictHostKeyChecking no
+
+2. Add a kernel with SSHFS support (or edit and existing one)
+
+.. code-block:: bash
+
+  sshpyk add --ssh-host-alias remote_server \
+        --kernel-name ssh_remote_python \
+        --display-name "Remote Python with SSHFS" \
+        --language python \
+        --remote-python-prefix /path/to/python \
+        --remote-kernel-name python3 \
+        --remote-sshfs /usr/bin/sshfs \
+        --ssh-host-alias-local-on-remote local_machine_on_remote \
+        --mount-local-on-remote "/local/project:/remote/mount"
+
+3. Or add SSHFS to an existing kernel
+
+.. code-block:: bash
+
+  sshpyk edit --kernel-name ssh_remote_python \
+              --remote-sshfs /usr/bin/sshfs \
+              --ssh-host-alias-local-on-remote local_machine_on_remote \
+              --mount-local-on-remote "/local/project:/remote/mount"
+
+Advanced SSHFS Options
+----------------------
+
+You can specify multiple mount points and custom SSHFS options:
+
+.. code-block:: bash
+
+  sshpyk add ... \
+      --mount-local-on-remote "/local/code:/remote/code:allow_other,follow_symlinks" \
+      --mount-local-on-remote "/local/data:/remote/data"
+
+Common SSHFS options include:
+
+* ``allow_other`` - Allow other users to access the mounted filesystem
+* ``follow_symlinks`` - Follow symbolic links on the local filesystem
+* ``compression=yes`` - Enable compression for better performance
+
+See ``sshfs --help`` for more options.
 
 Development
 ***********

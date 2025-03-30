@@ -5,6 +5,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Tuple
 
 from jupyter_client.kernelspec import KernelSpecManager
 
@@ -42,6 +43,7 @@ K_CMDS = "Command (simplified):"
 K_LANG = "Language:"
 K_SSH = "SSH Host Alias:"
 K_SSH_PATH = "SSH Path:"
+K_SSHD_PATH = "SSHD Path:"
 K_RPFX = "Remote Python Prefix:"
 K_RKER = "Remote Kernel Name:"
 K_RLANG = "Remote Language:"
@@ -52,6 +54,11 @@ K_INT = "Interrupt Mode:"
 K_RINT = "Remote Interrupt Mode:"
 K_RRES = "Remote Resource Dir:"
 K_RUNAME = "Remote System:"
+
+K_RSSHFS = "Remote SSHFS:"
+K_SSHLOCAL = "SSH Host Alias Reverse:"
+K_MOUNT = "Mount Point (simplified):"
+K_SSHFS_STATUS = "SSHFS Mounting:"
 
 ALL_KEYS = [
     K_NAME,
@@ -72,6 +79,11 @@ ALL_KEYS = [
     K_INT,
     K_RINT,
     K_RRES,
+    K_SSHD_PATH,
+    K_RSSHFS,
+    K_SSHLOCAL,
+    K_MOUNT,
+    K_SSHFS_STATUS,
 ]
 
 # Global variable for maximum key length
@@ -172,6 +184,11 @@ def extract_ssh_kernel_info(
         "shutdown_timeout": config.get("shutdown_timeout", SHUTDOWN_TIME),
         "interrupt_mode": interrupt_mode,
         "ssh": config.get("ssh", None),
+        "remote_sshfs": config.get("remote_sshfs", None),
+        "ssh_host_alias_l_on_r": config.get("ssh_host_alias_local_on_remote", None),
+        "mount_local_on_remote": config.get("mount_local_on_remote", None),
+        "sshfs_enabled": config.get("sshfs_enabled", None),
+        "sshd": config.get("sshd", None),
     }
 
 
@@ -225,6 +242,9 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         "uname": None,
         "interrupt_mode_ok": kernel.get("interrupt_mode") == "message",
         "interrupt_mode_remote": None,
+        "sshd_path": "",
+        "sshd_exec_ok": None,
+        "sshfs_exec_ok": None,
     }
 
     if skip_checks:
@@ -234,6 +254,10 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         ssh_bin = verify_local_ssh(kernel.get("ssh", None), name="ssh")
         results["ssh_path"] = ssh_bin
         results["ssh_exec_ok"] = ssh_bin is not None
+
+        sshd_bin = verify_local_ssh(kernel.get("sshd", None), name="sshd")
+        results["sshd_path"] = sshd_bin
+        results["sshd_exec_ok"] = sshd_bin is not None
 
         ssh_ok, _, uname = verify_ssh_connection(ssh_bin, kernel["host"])
         if not ssh_ok:
@@ -251,6 +275,14 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
                 str(Path(kernel["remote_python_prefix"]) / "bin" / "jupyter-kernel"),
             )
             results["exec_ok"] = bool(exec_ok)
+
+            if kernel.get("remote_sshfs", None):
+                ssh_exec_ok, _ = verify_rem_executable(
+                    ssh_bin,
+                    kernel["host"],
+                    kernel["remote_sshfs"],
+                )
+                results["sshfs_exec_ok"] = bool(ssh_exec_ok)
 
             # Check remote kernel exists
             remote_specs = get_remote_kernel_specs(
@@ -325,6 +357,40 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
     if check_res.get("remote_cmd"):
         k_lines.append(f"{C}{K_RCMD:<{K_LEN}}{N} {check_res['remote_cmd']}")
 
+    remote_sshfs = kernel.get("remote_sshfs", None)
+    ssh_host_alias_l_on_r = kernel.get("ssh_host_alias_l_on_r", None)
+    mount_local_on_remote = kernel.get("mount_local_on_remote", None)
+    sshfs_config = (remote_sshfs, ssh_host_alias_l_on_r, mount_local_on_remote)
+
+    sshfs_enabled = kernel.get("sshfs_enabled", None)
+    if sshfs_enabled is not None:
+        sshfs_status = f"{G}Enabled{N}" if sshfs_enabled else f"{R}Disabled{N}"
+        if any(sshfs_config) and not all(sshfs_config):
+            sshfs_status = f"{R}Invalid Configuration{N}"
+        k_lines.append(f"{C}{K_SSHFS_STATUS:<{K_LEN}}{N} {sshfs_status}")
+
+        c = format_check(check_res["sshd_exec_ok"])
+        k_lines.append(f"{C}{K_SSHD_PATH:<{K_LEN}}{N} {c} {check_res['sshd_path']}")
+
+    if remote_sshfs:
+        c = format_check(check_res["sshfs_exec_ok"])
+        k_lines.append(f"{C}{K_RSSHFS:<{K_LEN}}{N} {c} {remote_sshfs}")
+
+    if ssh_host_alias_l_on_r:
+        k_lines.append(f"{C}{K_SSHLOCAL:<{K_LEN}}{N} {ssh_host_alias_l_on_r}")
+    if mount_local_on_remote:
+        start = f"{C}{K_MOUNT:<{K_LEN}}{N}"
+        for mount in mount_local_on_remote:
+            if not len(mount) == 3:
+                logger.error(f"Invalid mount: {mount}")
+                continue
+            sshfs_cmd = f"sshfs {ssh_host_alias_l_on_r}:{mount[0]} {mount[1]}"
+            if mount[2]:
+                sshfs_cmd += f" -o {mount[2]}"
+            k_lines.append(f"{start} {sshfs_cmd} ...")
+            # For subsequent mounts, use the same start string
+            start = f"{C}{'':<{K_LEN}}{N}"
+
 
 def format_check(check_status):
     """Format a check result with appropriate color based on boolean status."""
@@ -339,6 +405,31 @@ def format_check(check_status):
         color = C
 
     return f"{color}{check_symbol}{N}"
+
+
+def validate_sshfs_config(args):
+    try:
+        ssh_bin = verify_local_ssh(args.ssh, name="ssh")
+    except EnvironmentError as e:
+        return False, f"SSH validation failed: {e}"
+
+    try:
+        verify_local_ssh(args.ssh, name="sshd")
+    except EnvironmentError as e:
+        return False, f"SSHD validation failed: {e}"
+
+    if args.remote_sshfs:
+        ok, msg = verify_rem_executable(ssh_bin, args.ssh_host_alias, args.remote_sshfs)
+        if not ok:
+            return False, f"Remote SSHFS validation failed: {msg}"
+
+    if args.mount_local_on_remote:
+        for mount in args.mount_local_on_remote:
+            local_dir = parse_mount(mount)[0]
+            if not Path(local_dir).is_dir():
+                return False, f"Local directory does not exist: {local_dir}"
+
+    return True, ""
 
 
 def add_kernel(args: argparse.Namespace) -> None:
@@ -386,6 +477,7 @@ def add_kernel(args: argparse.Namespace) -> None:
     # Create kernel spec
     config = {
         "ssh": args.ssh or None,
+        "sshd": args.sshd or None,
         "ssh_host_alias": args.ssh_host_alias,
         "remote_python_prefix": args.remote_python_prefix,
         "remote_kernel_name": args.remote_kernel_name,
@@ -422,6 +514,34 @@ def add_kernel(args: argparse.Namespace) -> None:
             }
         },
     }
+
+    sshfs_config = (args.remote_sshfs, args.ssh_host_alias_local_on_remote)
+    # Make it visible in the kernel.json config
+    if args.sshfs_enabled is None:
+        config["sshfs_enabled"] = all(sshfs_config)
+    else:
+        config["sshfs_enabled"] = args.sshfs_enabled
+
+    if all(sshfs_config):
+        config["remote_sshfs"] = args.remote_sshfs
+        config["ssh_host_alias_local_on_remote"] = args.ssh_host_alias_local_on_remote
+        config["mount_local_on_remote"] = list(
+            map(parse_mount, args.mount_local_on_remote)
+        )
+        valid, msg = validate_sshfs_config(args)
+        if not valid:
+            print(f"Error: {msg}")
+            sys.exit(1)
+
+    elif any(sshfs_config) and args.sshfs_enabled:
+        print(
+            "Error: Incomplete SSHFS configuration. "
+            "If you want to mount local directories on the remote system, "
+            "you must provide all of the following: "
+            "--remote-sshfs, --ssh-host-alias-local-on-remote, "
+            "and at least one --mount-local-on-remote"
+        )
+        sys.exit(1)
 
     kernel_dir = Path(ksm.user_kernel_dir) / kernel_name
     kernel_dir.mkdir(parents=True, exist_ok=True)
@@ -471,6 +591,9 @@ def edit_kernel(args: argparse.Namespace) -> None:
 
     if args.ssh:
         config["ssh"] = args.ssh
+    if args.sshd:
+        config["sshd"] = args.sshd
+
     if args.ssh_host_alias:
         if not RGX_SSH_HOST_ALIAS.match(args.ssh_host_alias):
             print(f"Error: Invalid SSH host alias '{args.ssh_host_alias}'")
@@ -493,11 +616,37 @@ def edit_kernel(args: argparse.Namespace) -> None:
     if args.shutdown_timeout:
         config["shutdown_timeout"] = args.shutdown_timeout
 
+    # If any SSHFS-related args are provided, update the configuration
+    if args.remote_sshfs:
+        config["remote_sshfs"] = args.remote_sshfs
+
+    if args.ssh_host_alias_local_on_remote:
+        config["ssh_host_alias_local_on_remote"] = args.ssh_host_alias_local_on_remote
+
+    if args.mount_local_on_remote:
+        # Override existing mount points with new ones
+        config["mount_local_on_remote"] = list(
+            map(parse_mount, args.mount_local_on_remote)
+        )
+
+    if args.sshfs_enabled is not None:
+        config["sshfs_enabled"] = args.sshfs_enabled
+
     # Write updated kernel.json
     with open(kernel_json_path, "w", encoding="utf-8") as f:
         json.dump(kernel_spec, f, indent=2)
 
     print(f"Kernel specification '{args.kernel_name}' updated in {kernel_dir}")
+
+
+def parse_mount(mount: str) -> Tuple[str, str, str]:
+    """Parse mount from a string."""
+    local, remote = mount.strip().split(":", 1)
+    if ":" in remote:
+        remote, sshfs_args = remote.split(":", 1)
+    else:
+        sshfs_args = ""
+    return (local.strip(), remote.strip(), sshfs_args.strip())
 
 
 def delete_kernel(args: argparse.Namespace) -> None:
@@ -596,6 +745,40 @@ def main() -> None:
         help="Path to SSH executable on local system. "
         "If not specified, will be auto-detected.",
     )
+    add_parser.add_argument(
+        "--sshd",
+        help="Path to SSHD executable on local system. Required when using SSHFS. "
+        "If not specified, will be auto-detected.",
+    )
+    add_parser.add_argument(
+        "--sshfs-enabled",
+        action="store_true",
+        default=None,
+        help="Enable SSHFS mounting (defaults to True if SSHFS options are set)",
+    )
+    add_parser.add_argument(
+        "--sshfs-disabled",
+        action="store_false",
+        dest="sshfs_enabled",
+        help="Disable SSHFS mounting",
+    )
+    add_parser.add_argument(
+        "--remote-sshfs",
+        help="Path to sshfs executable on remote system",
+    )
+    add_parser.add_argument(
+        "--ssh-host-alias-local-on-remote",
+        help="SSH host alias on the remote system that points back to the local system",
+    )
+    add_parser.add_argument(
+        "--mount-local-on-remote",
+        action="append",
+        help="Local-remote directory pair to mount "
+        "(format: local_path:remote_path[:sshfs_options]). "
+        "Can be specified multiple times for multiple mount points. "
+        "Optional sshfs_options are comma-separated options passed verbatim to sshfs, "
+        "i.e. `sshfs -o {sshfs_options} ...`. ",
+    )
     add_parser.set_defaults(func=add_kernel)
 
     # Edit command
@@ -612,7 +795,7 @@ def main() -> None:
     edit_parser.add_argument(
         "--remote-kernel-name",
         help="Kernel name on the remote system. "
-        + "Use `jupyter kernelspec list` on the remote system to find it.",
+        "Use `jupyter kernelspec list` on the remote system to find it.",
     )
     edit_parser.add_argument(
         "--launch-timeout",
@@ -631,6 +814,42 @@ def main() -> None:
         "--ssh",
         help="Path to SSH executable on local system. "
         "If not specified, will be auto-detected.",
+    )
+    edit_parser.add_argument(
+        "--sshd",
+        help="Path to SSHD executable on local system. Required when using SSHFS. "
+        "If not specified, will be auto-detected.",
+    )
+    edit_parser.add_argument(
+        "--sshfs-enabled",
+        action="store_true",
+        dest="sshfs_enabled",
+        default=None,
+        help="Enable SSHFS mounting (defaults to True if SSHFS options are present)",
+    )
+    edit_parser.add_argument(
+        "--sshfs-disabled",
+        action="store_false",
+        dest="sshfs_enabled",
+        help="Disable SSHFS mounting",
+    )
+    edit_parser.add_argument(
+        "--remote-sshfs",
+        help="Path to sshfs executable on remote system",
+    )
+    edit_parser.add_argument(
+        "--ssh-host-alias-local-on-remote",
+        help="SSH host alias on the remote system that points back to the local system",
+    )
+    edit_parser.add_argument(
+        "--mount-local-on-remote",
+        action="append",
+        help="Local-remote directory pair to mount "
+        "(format: local_path:remote_path[:sshfs_options]). "
+        "Can be specified multiple times for multiple mount points. "
+        "Optional sshfs_options are comma-separated options passed verbatim to sshfs, "
+        "i.e. `sshfs -o {sshfs_options} ...`. "
+        "Overwrites all existing mount points.",
     )
     edit_parser.set_defaults(func=edit_kernel)
 
