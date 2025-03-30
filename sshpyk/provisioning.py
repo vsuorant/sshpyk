@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import re
 import selectors
 import subprocess
@@ -16,11 +15,6 @@ from jupyter_client.connect import KernelConnectionInfo, LocalPortCache
 from jupyter_client.provisioning.provisioner_base import KernelProvisionerBase
 from traitlets import Integer, Unicode
 
-
-def _nope(*args, **kwargs):
-    pass
-
-
 RGX_CONN_FP = re.compile(r"file: (.*\.json)")
 PID_PREFIX = "KERNEL_APP_PID="
 RGX_PID = re.compile(rf"{PID_PREFIX}(\d+)")
@@ -28,8 +22,6 @@ REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
 # extracted from jupyter_client/kernelspec.py
 RGX_KERNEL_NAME = re.compile(r"^[a-z0-9._-]+$", re.IGNORECASE)
 RGX_SSH_HOST_ALIAS = re.compile(r"^[a-z0-9_-]+$", re.IGNORECASE)
-
-getpgid = getattr(os, "getpgid", _nope)
 
 
 class SshHost(Unicode):
@@ -119,12 +111,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     rem_jupyter = None
     rem_conn_fp = None
     rem_conn_info = None
-
-    # These are defined bc the LocalProvisioner has them
-    pid = None
-    pgid = None
-    pid_tunnels = None
-    pgid_tunnels = None
 
     rem_pid = None  # to be able to kill the remote process
 
@@ -371,13 +357,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # Close the input pipe, see launch_kernel in jupyter_client
         self.process.stdin.close()
 
-        self.pid = self.process.pid
-        self.pgid = None
-        try:
-            self.pgid = getpgid(self.pid)
-        except OSError:
-            pass
-
         # TODO: in case of exceptions, if possible, kill the remote process.
         await self.extract_rem_pid_and_connection_fp(
             rem_cmd, timeout=self.remote_kernel_launch_timeout
@@ -493,13 +472,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.connection_info = km.get_connection_info()
         self.ld(f"Connection info local: {self.connection_info}")
 
-        self.pid_tunnels = self.process_tunnels.pid
-        self.pgid_tunnels = None
-        try:
-            self.pgid_tunnels = getpgid(self.pid_tunnels)
-        except OSError:
-            pass
-
         return self.connection_info
 
     async def get_provisioner_info(self) -> Dict:
@@ -513,11 +485,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 "ssh_host_alias": self.ssh_host_alias,
                 "remote_python_prefix": self.remote_python_prefix,
                 "remote_kernel_name": self.remote_kernel_name,
-                "pid": self.pid,
-                "pgid": self.pgid,
-                "rem_pid": self.rem_pid,
-                "pid_tunnels": self.pid_tunnels,
-                "pgid_tunnels": self.pgid_tunnels,
                 "rem_conn_fp": self.rem_conn_fp,
                 "rem_conn_info": self.rem_conn_info,
             }
@@ -533,11 +500,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.ssh_host_alias = provisioner_info["ssh_host_alias"]
         self.remote_python_prefix = provisioner_info["remote_python_prefix"]
         self.remote_kernel_name = provisioner_info["remote_kernel_name"]
-        self.pid = provisioner_info["pid"]
-        self.pgid = provisioner_info["pgid"]
-        self.rem_pid = provisioner_info["rem_pid"]
-        self.pid_tunnels = provisioner_info["pid_tunnels"]
-        self.pgid_tunnels = provisioner_info["pgid_tunnels"]
         self.rem_conn_fp = provisioner_info["rem_conn_fp"]
         self.rem_conn_info = provisioner_info["rem_conn_info"]
 
