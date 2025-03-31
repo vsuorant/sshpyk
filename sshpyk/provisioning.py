@@ -278,8 +278,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         rem_args = [
             self.rem_jupyter,
-            "kernel",
-            f"--kernel={self.remote_kernel_name}",
+            f"--KernelApp.kernel_name={self.remote_kernel_name}",
             # Generating the configuration file on the remote upfront did not work
             # because the jupyter command on the remote seemed to
             # override the connection ports and the key in the connection file.
