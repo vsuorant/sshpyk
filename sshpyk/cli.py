@@ -145,18 +145,15 @@ def edit_kernel(args: argparse.Namespace) -> None:
         print(f"Error: Kernel '{args.kernel_name}' not found")
         sys.exit(1)
 
-    # Get the kernel spec path
+    # Get the kernel spec path and data
     spec_info = specs[args.kernel_name]
     kernel_dir = spec_info["resource_dir"]
     kernel_json_path = Path(kernel_dir) / "kernel.json"
+    kernel_spec = spec_info.get("spec", {})
 
-    if not kernel_json_path.exists():
-        print(f"Error: kernel.json not found at {kernel_json_path}")
+    if not kernel_spec:
+        print(f"Error: empty kernel spec at {kernel_json_path}")
         sys.exit(1)
-
-    # Read existing kernel spec
-    with open(kernel_json_path, "r", encoding="utf-8") as f:
-        kernel_spec = json.load(f)
 
     # Check if it's an SSH kernel
     metadata = kernel_spec.get("metadata", {})
