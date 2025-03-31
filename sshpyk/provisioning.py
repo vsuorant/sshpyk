@@ -7,13 +7,14 @@ import selectors
 import subprocess
 import time
 from pathlib import Path
-from shutil import which
 from subprocess import PIPE, Popen, run
 from typing import Any, Callable, Dict, List, Optional
 
 from jupyter_client.connect import KernelConnectionInfo, LocalPortCache
 from jupyter_client.provisioning.provisioner_base import KernelProvisionerBase
 from traitlets import Integer, Unicode
+
+from .utils import verify_rem_executable, verify_ssh_connection
 
 RGX_CONN_FP = re.compile(r"file: (.*\.json)")
 PID_PREFIX = "KERNEL_APP_PID="
@@ -107,7 +108,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     ports_cached = False
     ssh = None
 
-    rem_python = None
+    # rem_python = None
     rem_jupyter = None
     rem_conn_fp = None
     rem_conn_info = None
@@ -264,13 +265,20 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         ):
             raise ValueError("Bad configuration")
 
-        p = Path(self.remote_python_prefix)
-        self.rem_python = str(p / "bin" / "python")
-        self.rem_jupyter = str(p / "bin" / "jupyter-kernel")
+        self.ssh, ssh_conn_ok, msg = verify_ssh_connection(
+            self.ssh_host_alias, self.log
+        )
+        if not ssh_conn_ok:
+            raise RuntimeError(f"{msg} See jupyter logs for details.")
 
-        self.ssh = which("ssh")
-        if not self.ssh:
-            raise EnvironmentError("'ssh' executable not found")
+        p = Path(self.remote_python_prefix)
+        self.rem_jupyter = str(p / "bin" / "jupyter-kernel")
+        ok, msg = verify_rem_executable(
+            self.ssh, self.ssh_host_alias, self.rem_jupyter, self.log
+        )
+        if not ok:
+            raise RuntimeError(f"{msg} See jupyter logs for details.")
+        # self.rem_python = str(p / "bin" / "python")
 
         km = self.parent  # KernelManager
         if km is None:
