@@ -88,6 +88,7 @@ def list_kernels(args: argparse.Namespace) -> None:
                     remote_kernel_name,
                     resource_dir,
                     ssh_command,  # Use ssh_command instead of local argv that is empty
+                    config.get("remote_kernel_launch_timeout", 60),  # Add timeout
                 )
             )
         else:
@@ -129,19 +130,22 @@ def list_kernels(args: argparse.Namespace) -> None:
         max_argv_len = len("Command")  # Reset to minimum width for header
 
         # Calculate column widths for SSH table
-        name_len = max(len(name) for name, _, _, _, _, _, _ in ssh_rows)
+        name_len = max(len(name) for name, _, _, _, _, _, _, _ in ssh_rows)
         name_len = max(name_len, len("Name"))
 
-        display_len = max(len(display) for _, display, _, _, _, _, _ in ssh_rows)
+        display_len = max(len(display) for _, display, _, _, _, _, _, _ in ssh_rows)
         display_len = max(display_len, len("Display Name"))
 
-        prefix_len = max(len(prefix) for _, _, _, prefix, _, _, _ in ssh_rows)
+        prefix_len = max(len(prefix) for _, _, _, prefix, _, _, _, _ in ssh_rows)
         # Add 2 characters for the check mark and space
         prefix_len = max(prefix_len + 2, len("Remote .../bin/jupyter-kernel"))
 
-        kernel_len = max(len(kernel) for _, _, _, _, kernel, _, _ in ssh_rows)
+        kernel_len = max(len(kernel) for _, _, _, _, kernel, _, _, _ in ssh_rows)
         # Add 2 characters for the check mark and space
         kernel_len = max(kernel_len + 2, len("Kernel Spec"))
+
+        # Add timeout column width
+        timeout_len = len("Timeout")  # Minimum width for header
 
         # Print SSH table headers (without Path column)
         output_lines.append(
@@ -149,6 +153,7 @@ def list_kernels(args: argparse.Namespace) -> None:
             f"{'SSH Conn'.ljust(max_host_len)} | "
             f"{'Remote .../bin/jupyter-kernel'.ljust(prefix_len)} | "
             f"{'Kernel Spec'.ljust(kernel_len)} | "
+            f"{'Timeout'.ljust(timeout_len)} | "
             f"{'Command'}"
         )
         # Add a placeholder for the separator line - will be updated after processing
@@ -164,6 +169,7 @@ def list_kernels(args: argparse.Namespace) -> None:
             remote_kernel_name,
             _resource_dir,
             _argv,
+            timeout,
         ) in ssh_rows:
             # Initialize check results (without colors)
             ssh_check = "✗"
@@ -237,17 +243,19 @@ def list_kernels(args: argparse.Namespace) -> None:
             padding_kernel = kernel_len - visible_kernel_len
             padded_kernel = formatted_remote_kernel + " " * padding_kernel
 
+            # Format the row with all checks and information
             output_lines.append(
                 f"{display_name.ljust(display_len)} | {name.ljust(name_len)} | "
                 f"{padded_host} | {padded_prefix} | "
-                f"{padded_kernel} | {remote_cmd}"
+                f"{padded_kernel} | {str(timeout).ljust(timeout_len)} | "
+                f"{remote_cmd}"
             )
 
         # After all rows are processed, create the separator line with the final
         # max_argv_len
         separator_line = (
             f"{'-' * display_len}-+-{'-' * name_len}-+-{'-' * max_host_len}-+-"
-            f"{'-' * prefix_len}-+-{'-' * kernel_len}-+-"
+            f"{'-' * prefix_len}-+-{'-' * kernel_len}-+-{'-' * timeout_len}-+-"
             f"{'-' * max_argv_len}"
         )
 
