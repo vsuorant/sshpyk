@@ -47,7 +47,7 @@ def verify_ssh_connection(
     """Verify that the SSH connection to the remote host is working."""
     ssh = verify_local_ssh(log)
     cmd = [ssh, host_alias, "echo OK"]
-    log.debug(f"Verifying SSH connection to {host_alias}: {cmd = }")
+    log.debug(f"Verifying SSH connection to {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
         capture_output=True,
@@ -57,10 +57,10 @@ def verify_ssh_connection(
     ret_str = ret.stdout.strip()
     ok = ret_str == "OK"
     if not ok:
-        msg = f"SSH connection to {host_alias} failed: {ret_str!r}"
+        msg = f"SSH connection to {host_alias!r} failed: {ret_str!r}"
         log.error(msg)
     else:
-        msg = f"SSH connection to {host_alias} succeeded"
+        msg = f"SSH connection to {host_alias!r} succeeded"
         log.info(msg)
     return ssh, ok, msg
 
@@ -74,7 +74,7 @@ def verify_rem_executable(
     """Verify that the remote executable exists and is executable."""
     # NB the quotes around filename are mandatory and safer
     cmd = [ssh, host_alias, f'test -e "{fp}" && test -r "{fp}" && test -x "{fp}"']
-    log.debug(f"Verifying remote executable {fp} on {host_alias}: {cmd = }")
+    log.debug(f"Verifying remote executable {fp!r} on {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
         capture_output=True,
@@ -84,10 +84,10 @@ def verify_rem_executable(
     ok = ret.returncode == 0
     ret_str = ret.stdout.strip()
     if not ok:
-        msg = f"Remote {fp} not found/readable/executable ({ret_str!r})"
+        msg = f"Remote {fp!r} not found/readable/executable ({ret_str!r})"
         log.error(msg)
     else:
-        msg = f"Remote {fp} exists, is readable and executable."
+        msg = f"Remote {fp!r} exists, is readable and executable."
         log.debug(msg)
     return ok, msg
 
@@ -103,7 +103,7 @@ def fetch_remote_kernel_specs(
     Returns a dictionary of kernel specs from the remote system.
     """
     cmd = [ssh, host_alias, f"{python} -c '{GET_ALL_SPECS_PY}'"]
-    log.debug(f"Fetching remote kernel specs from {host_alias}: {cmd = }")
+    log.debug(f"Fetching remote kernel specs from {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
         capture_output=True,
@@ -117,7 +117,7 @@ def fetch_remote_kernel_specs(
 
     try:
         specs = json.loads(ret.stdout.strip())
-        log.info(f"Successfully fetched {len(specs)} kernel specs from {host_alias}")
+        log.info(f"Successfully fetched {len(specs)} kernel specs from {host_alias!r}")
         return specs
     except json.JSONDecodeError as e:
         msg = f"Failed to parse remote kernel specs: {e}"
