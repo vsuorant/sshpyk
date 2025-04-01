@@ -460,7 +460,7 @@ def main() -> None:
         "-v",
         action="count",
         default=0,
-        help="Increase verbosity (can be used multiple times)",
+        help="Increase logs verbosity (-v for warning, -vv for info, -vvv for debug)",
     )
 
     # Create subparsers for commands
