@@ -66,6 +66,15 @@ Listing Available Kernels
 
 You can list all available kernels using the :code:`list` command::
 
+  $ sshpyk list --help
+  usage: sshpyk list [-h] [--remote] [--local] [--no-check]
+
+  options:
+    -h, --help      show this help message and exit
+    --remote, -r    List only remote SSH kernels
+    --local, -l     List only local kernels
+    --no-check, -n  Skip remote kernel checks
+
   $ sshpyk list
   ---- Local Kernel ----
   Name:                  f310
