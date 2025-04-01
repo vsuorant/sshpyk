@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 # ANSI color codes for terminal output
 G = "\033[32m"  # Green
 R = "\033[31m"  # Red
+C = "\033[36m"  # Cyan
 N = "\033[39m"  # Reset color only, not formatting
 
 
@@ -68,8 +69,8 @@ def list_kernels(args: argparse.Namespace) -> None:
 
             # Generate command for SSH kernels
             ssh_command = (
-                f"ssh {host} {remote_python_prefix}/bin/jupyter-kernel "
-                + f"--KernelApp.kernel_name={remote_kernel_name}"
+                f"ssh {host} jupyter-kernel "
+                + f"--KernelApp.kernel_name={remote_kernel_name} ..."
             )
 
             # Add 2 characters for the check mark and space
@@ -114,9 +115,16 @@ def list_kernels(args: argparse.Namespace) -> None:
         )
 
         for name, display_name, _host, resource_dir, argv in rows:
+            # Check if it's an SSH kernel by checking if _host is not empty
+            cyan = C if _host else ""
+            # Add ® symbol before kernel name for SSH kernels
+            r = "®" if _host else ""
             output_lines.append(
-                f"{display_name.ljust(display_len)} | {name.ljust(name_len)} | "
-                f"{resource_dir.ljust(max_path_len)} | {argv}"
+                f"{cyan}{display_name.ljust(display_len)}{N if cyan else ''} |"
+                f"{cyan}{r if r else ' '}"
+                f"{name.ljust(name_len)}{N if cyan else ''} | "
+                f"{cyan}{resource_dir.ljust(max_path_len)}{N if cyan else ''} | "
+                f"{cyan}{argv}{N if cyan else ''}"
             )
         if output_lines:
             print("\n".join(output_lines))
