@@ -1,27 +1,42 @@
-Remote Jupyter Kernels via SSH Tunnels
-######################################
+Remote Jupyter Kernels via SSH
+##############################
 
-Why sshpyk?
-**********
+Launch and connect securely to Jupyter kernels on remote machines via SSH with minimal
+configuration, as if they were local.
 
-Data scientists and researchers often need to:
+Quick Start
+***********
 
-* Run computations on powerful remote servers while using local notebooks
-* Access specialized hardware (GPUs, large memory) not available locally
-* Work with data that can't leave secure environments due to size or privacy
-* Maintain a consistent development environment across multiple machines
+Get up and running with sshpyk in minutes:
 
-sshpyk solves these problems by:
+1. Install sshpyk on your local machine::
 
-* Creating secure SSH tunnels to remote Jupyter kernels with minimal configuration
-* Supporting modern Jupyter Client (7.0+) with its kernel provisioning API
-* Enabling passwordless, key-based authentication for seamless connections
-* Working with complex network setups including bastion/jump hosts
+    pip install sshpyk
 
-The design of this package is based upon `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ which
-in turn is based upon `remote_ikernel <https://bitbucket.org/tdaff/remote_ikernel>`_. This implementation was
-created to adapt to recent changes to :code:`jupyter_client` (which broke :code:`ssh_ipykernel`)
-and to support Python 3.10+.
+See `Installation`_ for more details.
+
+2. Ensure you have SSH access to your remote server and public key authentication is set up::
+
+    # Test your connection - must connect without password prompt
+    ssh remote_server_alias
+
+See `Authentication Requirements`_ for setting up SSH keys.
+
+3. Add a remote kernel (replace values with your configuration)::
+
+    sshpyk add --ssh-host-alias remote_server_alias \
+                --kernel-name ssh_remote_python3 \
+                --display-name "Remote Python 3.10" \
+                --remote-python-prefix /path/to/python/env \
+                --remote-kernel-name python3 \
+
+See `Adding a Remote Kernel`_ for all available options.
+
+4. Start JupyterLab and select your new remote kernel for a notebook/console::
+
+    jupyter lab
+
+5. Your code now runs on the remote server and your local notebook interfaces with it!
 
 Installation
 ************
@@ -76,37 +91,35 @@ You can list all available kernels using the :code:`list` command::
     --no-check, -n  Skip remote kernel checks
 
   $ sshpyk list
-  ---- Local Kernel ----
-  Name:                  f310
-  Display Name:          Python 3.10
-  Resource Dir:          /Users/victor/Library/Jupyter/kernels/f310
-  Command:               /opt/homebrew/anaconda3/envs/f310/bin/python -m ipykernel_launcher -f {connection_file}
-  Language:              python
-  Interrupt Mode:        signal
+  ----- Local Kernel ------
+  Name:                     f310
+  Display Name:             Python 3.10
+  Resource Dir:             /Users/victor/Library/Jupyter/kernels/f310
+  Command:                  /opt/homebrew/anaconda3/envs/f310/bin/python -m ipykernel_launcher -f {connection_file}
+  Language:                 python
+  Interrupt Mode:           signal
 
-  ---- Local Kernel ----
-  Name:                  ir
-  Display Name:          R
-  Resource Dir:          /opt/homebrew/anaconda3/envs/g/share/jupyter/kernels/ir
-  Command:               R --slave -e IRkernel::main() --args {connection_file}
-  Language:              R
-  Interrupt Mode:        signal
+  ----- Local Kernel ------
+  Name:                     ir
+  Display Name:             R
+  Resource Dir:             /opt/homebrew/anaconda3/envs/g/share/jupyter/kernels/ir
+  Command:                  R --slave -e IRkernel::main() --args {connection_file}
+  Language:                 R
+  Interrupt Mode:           signal
 
-  ----- SSH Kernel -----
-  Name:                  ssh_mbp_ext
-  Display Name:          Python 3.13 (mbp ext)
-  Resource Dir:          /Users/victor/Library/Jupyter/kernels/ssh_mbp_ext
-  Command (simplified):  ssh mbp_ext jupyter-kernel --KernelApp.kernel_name=python3
-  Language:              python
-  Interrupt Mode:        message
-  SSH Host Alias:        (v) mbp_ext
-  Remote Python Prefix:  (v) /opt/homebrew/anaconda3/envs/g
-  Remote Kernel Name:    (v) python3
-  Remote Language:       python
-  Remote Resource Dir:   /opt/homebrew/anaconda3/envs/g/share/jupyter/kernels/python3
+  ------ SSH Kernel -------
+  Name:                     ssh_mbp_ext
+  Display Name:             Python 3.13 (mbp ext)
+  Resource Dir:             /Users/victor/Library/Jupyter/kernels/ssh_mbp_ext
+  Command (simplified):     ssh mbp_ext jupyter-kernel --KernelApp.kernel_name=python3 ...
+  Language:                 python
+  SSH Host Alias:           (v) mbp_ext
+  SSH Path:                 (v) /opt/homebrew/bin/ssh
+  Remote Python Prefix:     (v) /opt/homebrew/anaconda3/envs/g
+  Remote Kernel Name:       (v) python3
+  Start Timeout:            30
+  Remote Command:           python -m ipykernel_launcher -f {connection_file}
   Remote Interrupt Mode: signal
-  Start Timeout:         60
-  Remote Command:        python -m ipykernel_launcher -f {connection_file}
 
 Adding a Remote Kernel
 ======================
@@ -144,7 +157,7 @@ The :code:`--ssh-host-alias` parameter refers to host aliases defined in your SS
 These aliases provide a convenient way to manage connections to remote systems.
 
 .. note::
-   Currently, Windows is not supported as either a local or remote machine.
+  Currently, Windows is not supported as either a local or remote machine.
 
 Basic SSH Config Setup
 ======================
@@ -163,26 +176,33 @@ With this configuration, you can use :code:`myserver` as your :code:`--ssh-host-
 Authentication Requirements
 ===========================
 
-**Important**: sshpyk only supports passwordless SSH authentication. You must set up key-based authentication
+**Important**: sshpyk only supports key-based SSH authentication. You must set up SSH key authentication
 for all remote hosts you intend to use.
 
-To set up passwordless SSH authentication:
+To set up SSH key-based authentication:
 
 1. Generate an SSH key pair on your local machine (if you don't already have one)::
 
-     ssh-keygen -t ed25519 -C "your_email@example.com"
+    ssh-keygen -t ed25519 -f ~/.ssh/name_of_your_key -C "some comment for your own reference"
 
 2. Copy your public key to the remote server::
 
-     ssh-copy-id username@remote-host
+    ssh-copy-id remote_username@some.remote.server.com
 
-   Or manually add the contents of :code:`~/.ssh/id_ed25519.pub` to :code:`~/.ssh/authorized_keys` on the remote machine.
+Or manually add the contents of :code:`~/.ssh/name_of_your_key.pub` from your local machine to :code:`~/.ssh/authorized_keys` on the remote machine.
 
-3. Test your connection::
+3. Add the key to your SSH config (edit to match your own setup)::
 
-     ssh remote-host
+    Host remote_server_alias
+      HostName some.remote.server.com
+      User remote_username
+      IdentityFile ~/.ssh/name_of_your_key
+      StrictHostKeyChecking no # optional, but recommended for automation
 
-   You should connect without being prompted for a password.
+4. Test your connection::
+
+    # You should connect without being prompted for a password.
+    ssh remote_server_alias
 
 Advanced: Using Bastion Hosts
 =============================
@@ -212,7 +232,7 @@ When using sshpyk, you would simply specify :code:`--ssh-host-alias internal-ser
 will be handled automatically according to your configuration.
 
 .. note::
-   Remember that passwordless authentication must be set up for both the bastion host and the internal server.
+  Remember that SSH key-based authentication must be set up for both the bastion host and the internal server.
 
 Development
 ###########
@@ -245,3 +265,11 @@ It implements a custom :code:`KernelProvisionerBase` subclass called :code:`SSHK
 
 The provisioner is registered as an entry point in :code:`pyproject.toml`, making it available to any
 Jupyter application that uses `jupyter_client`.
+
+Historical Note
+***************
+
+The design of this package was initially inspired upon `SSH Kernel <https://github.com/bernhard-42/ssh_ipykernel>`_ which
+in turn is based upon `remote_ikernel <https://bitbucket.org/tdaff/remote_ikernel>`_. This implementation was
+created to adapt to recent changes to :code:`jupyter_client` (which broke :code:`ssh_ipykernel`)
+and to support Python 3.10+. Later it was reimplemented to integrate with jupyter_client's provisioning system.
