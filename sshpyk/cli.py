@@ -5,13 +5,13 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Dict
 
 from jupyter_client.kernelspec import KernelSpecManager
 
 from .provisioning import RGX_KERNEL_NAME, RGX_SSH_HOST_ALIAS
 from .utils import (
     fetch_remote_kernel_specs,
+    verify_local_ssh,
     verify_rem_executable,
     verify_ssh_connection,
 )
@@ -24,7 +24,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 LOG_FORMAT = "%(process)6d %(asctime)s %(levelname)-8s %(name)s %(module)s:%(lineno)d %(funcName)s: %(message)s"  # noqa: E501
-
 
 # ANSI color codes for terminal output
 G = "\033[32m"  # Green
@@ -40,6 +39,7 @@ K_CMD = "Command:"
 K_CMDS = "Command (simplified):"
 K_LANG = "Language:"
 K_SSH = "SSH Host Alias:"
+K_SSH_PATH = "SSH Path:"
 K_RPFX = "Remote Python Prefix:"
 K_RKER = "Remote Kernel Name:"
 K_RLANG = "Remote Language:"
@@ -50,8 +50,31 @@ K_RINT = "Remote Interrupt Mode:"
 K_RRES = "Remote Resource Dir:"
 
 
-def create_header(text: str, width: int, color: str = "") -> str:
-    dash_count = width - len(text)
+ALL_KEYS = [
+    K_NAME,
+    K_DISP,
+    K_RES,
+    K_CMD,
+    K_CMDS,
+    K_LANG,
+    K_SSH,
+    K_SSH_PATH,
+    K_RPFX,
+    K_RKER,
+    K_RLANG,
+    K_TIME,
+    K_RCMD,
+    K_INT,
+    K_RINT,
+    K_RRES,
+]
+
+# Global variable for maximum key length
+K_LEN = max(len(key) for key in ALL_KEYS)
+
+
+def create_header(text: str, color: str = "") -> str:
+    dash_count = K_LEN - len(text)
     left_dashes = "-" * (dash_count // 2)
     right_dashes = "-" * (dash_count - (dash_count // 2))
     return f"{color}{left_dashes}{text}{right_dashes}{N if color else ''}"
@@ -68,6 +91,19 @@ def list_kernels(args: argparse.Namespace) -> None:
         return
 
     # Separate kernels into local and SSH
+    local_kernels, ssh_kernels = separate_kernels(specs)
+
+    # Print local kernels
+    if local_kernels and (args.local or not (args.remote and not args.local)):
+        print_local_kernels(local_kernels, specs)
+
+    # Process SSH kernels with sanity checks
+    if ssh_kernels and (args.remote or not (args.local and not args.remote)):
+        print_ssh_kernels(ssh_kernels, args.no_check)
+
+
+def separate_kernels(specs):
+    """Separate kernels into local and SSH categories."""
     local_kernels = []
     ssh_kernels = []
 
@@ -84,23 +120,10 @@ def list_kernels(args: argparse.Namespace) -> None:
         is_ssh = provisioner.get("provisioner_name") == "sshpyk-provisioner"
 
         if is_ssh:
-            config = provisioner.get("config", {})
-            host = config.get("ssh_host_alias", "")
-            remote_python_prefix = config.get("remote_python_prefix", "")
-            remote_kernel_name = config.get("remote_kernel_name", "")
-            timeout = config.get("remote_kernel_launch_timeout", 60)
-
             ssh_kernels.append(
-                {
-                    "name": name,
-                    "display_name": display_name,
-                    "resource_dir": resource_dir,
-                    "host": host,
-                    "remote_python_prefix": remote_python_prefix,
-                    "remote_kernel_name": remote_kernel_name,
-                    "timeout": timeout,
-                    "language": language,
-                }
+                extract_ssh_kernel_info(
+                    name, spec_info, display_name, resource_dir, language
+                )
             )
         else:
             local_kernels.append(
@@ -112,195 +135,181 @@ def list_kernels(args: argparse.Namespace) -> None:
                     "language": language,
                 }
             )
-    all_keys = [
-        K_NAME,
-        K_DISP,
-        K_RES,
-        K_CMD,
-        K_LANG,
-        K_SSH,
-        K_RPFX,
-        K_RKER,
-        K_RLANG,
-        K_TIME,
-        K_RCMD,
-        K_INT,
-        K_RINT,
-        K_RRES,
-    ]
-    max_key_len = max(len(key) for key in all_keys)
 
-    # Print local kernels
-    if local_kernels and (args.local or not (args.remote and not args.local)):
-        for kernel in local_kernels:
-            # Print header for local kernels
-            print(create_header(" Local Kernel ", max_key_len, M))
+    return local_kernels, ssh_kernels
 
-            kernel_lines = []
-            kernel_lines.append(f"{M}{K_NAME:<{max_key_len}}{N} {kernel['name']}")
-            kernel_lines.append(
-                f"{M}{K_DISP:<{max_key_len}}{N} {kernel['display_name']}"
-            )
-            kernel_lines.append(
-                f"{M}{K_RES:<{max_key_len}}{N} {kernel['resource_dir']}"
-            )
-            kernel_lines.append(f"{M}{K_CMD:<{max_key_len}}{N} {kernel['argv']}")
-            kernel_lines.append(
-                f"{M}{K_LANG:<{max_key_len}}{N} {kernel.get('language', '')}"
-            )
-            # Add interrupt_mode if present
-            interrupt_mode = (
-                specs[kernel["name"]].get("spec", {}).get("interrupt_mode", "")
-            )
-            if interrupt_mode:
-                kernel_lines.append(f"{M}{K_INT:<{max_key_len}}{N} {interrupt_mode}")
 
-            print("\n".join(kernel_lines), end="\n\n")
+def extract_ssh_kernel_info(name, spec_info, display_name, resource_dir, language):
+    """Extract SSH kernel information from a kernel spec."""
+    spec = spec_info.get("spec", {})
+    metadata = spec.get("metadata", {})
+    provisioner = metadata.get("kernel_provisioner", {})
+    config = provisioner.get("config", {})
 
+    return {
+        "name": name,
+        "display_name": display_name,
+        "resource_dir": resource_dir,
+        "language": language,
+        "host": config.get("ssh_host_alias", ""),
+        "remote_python_prefix": config.get("remote_python_prefix", ""),
+        "remote_kernel_name": config.get("remote_kernel_name", ""),
+        "timeout": config.get("remote_kernel_launch_timeout", 60),
+        "ssh": config.get("ssh", None),
+    }
+
+
+def print_local_kernels(local_kernels, specs):
+    """Print information about local kernels."""
+    for kernel in local_kernels:
+        # Print header for local kernels
+        print(create_header(" Local Kernel ", M))
+
+        k_lines = []
+        k_lines.append(f"{M}{K_NAME:<{K_LEN}}{N} {kernel['name']}")
+        k_lines.append(f"{M}{K_DISP:<{K_LEN}}{N} {kernel['display_name']}")
+        k_lines.append(f"{M}{K_RES:<{K_LEN}}{N} {kernel['resource_dir']}")
+        k_lines.append(f"{M}{K_CMD:<{K_LEN}}{N} {kernel['argv']}")
+        k_lines.append(f"{M}{K_LANG:<{K_LEN}}{N} {kernel.get('language', '')}")
+
+        # Add interrupt_mode if present
+        interrupt_mode = specs[kernel["name"]].get("spec", {}).get("interrupt_mode", "")
+        if interrupt_mode:
+            k_lines.append(f"{M}{K_INT:<{K_LEN}}{N} {interrupt_mode}")
+
+        print("\n".join(k_lines), end="\n\n")
+
+
+def print_ssh_kernels(ssh_kernels, skip_checks):
+    """Print information about SSH kernels with optional sanity checks."""
     # Cache for remote kernel specs to avoid multiple calls to the same host
-    remote_specs_cache: Dict[str, Dict] = {}
+    remote_specs_cache = {}
 
-    # Process SSH kernels with sanity checks
-    if ssh_kernels and (args.remote or not (args.local and not args.remote)):
-        for kernel in ssh_kernels:
-            # Print header for SSH kernels
-            kernel_lines = [create_header(" SSH Kernel ", max_key_len, C)]
+    for kernel in ssh_kernels:
+        # Print header for SSH kernels
+        k_lines = [create_header(" SSH Kernel ", C)]
 
-            # Perform checks if not skipped
-            ssh_check = "(x)"
-            exe_check = "(x)"
-            k_check = "(x)"
-            remote_cmd = ""
-            ssh_ok = exec_ok = kernel_ok = False
+        # Perform checks if not skipped
+        check_res = perform_kernel_checks(kernel, skip_checks, remote_specs_cache)
 
-            if not args.no_check:
-                try:
-                    # Check SSH connection
-                    ssh_bin, ssh_ok, _ = verify_ssh_connection(kernel["host"])
-                    if ssh_ok:
-                        ssh_check = "(v)"
+        # Format and add kernel information to lines
+        format_ssh_kernel_info(k_lines, kernel, check_res)
 
-                        # Check remote executable
-                        exec_ok, _ = verify_rem_executable(
-                            ssh_bin,
-                            kernel["host"],
-                            str(
-                                Path(kernel["remote_python_prefix"])
-                                / "bin"
-                                / "jupyter-kernel"
-                            ),
-                        )
-                        if exec_ok:
-                            exe_check = "(v)"
+        print("\n".join(k_lines), end="\n\n")
 
-                        # Check remote kernel exists
-                        if kernel["host"] not in remote_specs_cache:
-                            try:
-                                remote_specs_cache[kernel["host"]] = (
-                                    fetch_remote_kernel_specs(
-                                        ssh_bin,
-                                        kernel["host"],
-                                        str(
-                                            Path(kernel["remote_python_prefix"])
-                                            / "bin"
-                                            / "python"
-                                        ),
-                                    )
-                                )
-                            except Exception:
-                                remote_specs_cache[kernel["host"]] = {}
 
-                        remote_specs = remote_specs_cache.get(kernel["host"], {})
-                        kernel_ok = kernel["remote_kernel_name"] in remote_specs
-                        if kernel_ok:
-                            k_check = "(v)"
-                            # Get the remote kernel's argv
-                            rkn = kernel["remote_kernel_name"]
-                            remote_kernel_spec = remote_specs.get(rkn, {}).get(
-                                "spec", {}
-                            )
-                            remote_argv = remote_kernel_spec.get("argv", [])
-                            if remote_argv:
-                                remote_cmd = " ".join(remote_argv)
-                except Exception as e:
-                    logger.error(f"Error checking kernel {kernel['name']}: {e}")
+def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
+    """Perform sanity checks on SSH kernel configuration."""
+    results = {
+        "remote_cmd": "",
+        "ssh_path": "",
+        "ssh_ok": None,
+        "exec_ok": None,
+        "kernel_ok": None,
+        "ssh_exec_ok": None,
+    }
+
+    if skip_checks:
+        return results
+
+    try:
+        ssh_bin = verify_local_ssh(kernel.get("ssh", None), name="ssh")
+        results["ssh_path"] = ssh_bin
+        results["ssh_exec_ok"] = ssh_bin is not None
+
+        # Check SSH connection
+        ssh_ok, _ = verify_ssh_connection(ssh_bin, kernel["host"])
+        if not ssh_ok:
+            results["ssh_ok"] = False
+            return results
+
+        if ssh_ok:
+            results["ssh_ok"] = True
+
+            exec_ok, _ = verify_rem_executable(
+                ssh_bin,
+                kernel["host"],
+                str(Path(kernel["remote_python_prefix"]) / "bin" / "jupyter-kernel"),
+            )
+            results["exec_ok"] = bool(exec_ok)
+
+            # Check remote kernel exists
+            remote_specs = get_remote_kernel_specs(
+                ssh_bin,
+                kernel["host"],
+                kernel["remote_python_prefix"],
+                remote_specs_cache,
+            )
+
+            if kernel["remote_kernel_name"] in remote_specs:
+                results["kernel_ok"] = True
+                # Get the remote kernel's argv
+                rkn = kernel["remote_kernel_name"]
+                remote_kernel_spec = remote_specs.get(rkn, {}).get("spec", {})
+                remote_argv = remote_kernel_spec.get("argv", [])
+                if remote_argv:
+                    results["remote_cmd"] = " ".join(remote_argv)
             else:
-                # Skip checks if --no-check is provided
-                ssh_check = "(?)"
-                exe_check = "(?)"
-                k_check = "(?)"
+                results["kernel_ok"] = False
+    except Exception as e:
+        logger.error(f"Error checking kernel {kernel['name']}: {e}")
 
-            # Format SSH host with check mark/cross
-            c = R if ssh_check == "(x)" else (G if ssh_check == "(v)" else C)
-            formatted_ssh_host = (
-                f"{c}{ssh_check[0]}{ssh_check[1:]}{N if c else ''} {kernel['host']}"
-            )
-            # Format remote prefix with check mark/cross
-            c = R if exe_check == "(x)" else (G if exe_check == "(v)" else C)
-            formatted_remote_prefix = (
-                f"{c}{exe_check[0]}{exe_check[1:]}{N if c else ''} "
-                + kernel["remote_python_prefix"]
-            )
-            # Format remote kernel with check mark/cross
-            c = R if k_check == "(x)" else (G if k_check == "(v)" else C)
-            formatted_remote_kernel = (
-                f"{c}{k_check[0]}{k_check[1:]}{N if c else ''} "
-                + kernel["remote_kernel_name"]
-            )
+    return results
 
-            kernel_lines.append(f"{C}{K_NAME:<{max_key_len}}{N} {kernel['name']}")
-            kernel_lines.append(
-                f"{C}{K_DISP:<{max_key_len}}{N} {kernel['display_name']}"
-            )
-            kernel_lines.append(
-                f"{C}{K_RES:<{max_key_len}}{N} {kernel['resource_dir']}"
-            )
-            ssh_command = (
-                f"ssh {kernel['host']} jupyter-kernel "
-                + f"--KernelApp.kernel_name={kernel['remote_kernel_name']}"
-            )
-            kernel_lines.append(f"{C}{K_CMDS:<{max_key_len}}{N} {ssh_command}")
-            language = spec.get("language", "")
-            if language:
-                kernel_lines.append(f"{C}{K_LANG:<{max_key_len}}{N} {language}")
-            interrupt_mode = (
-                specs[kernel["name"]].get("spec", {}).get("interrupt_mode", "")
-            )
-            if interrupt_mode:
-                kernel_lines.append(f"{C}{K_INT:<{max_key_len}}{N} {interrupt_mode}")
-            kernel_lines.append(f"{C}{K_SSH:<{max_key_len}}{N} {formatted_ssh_host}")
-            kernel_lines.append(
-                f"{C}{K_RPFX:<{max_key_len}}{N} {formatted_remote_prefix}"
-            )
-            kernel_lines.append(
-                f"{C}{K_RKER:<{max_key_len}}{N} {formatted_remote_kernel}"
-            )
-            if kernel_ok:
-                remote_language = remote_kernel_spec.get("language", "")
-                if remote_language:
-                    kernel_lines.append(
-                        f"{C}{K_RLANG:<{max_key_len}}{N} {remote_language}"
-                    )
 
-                # Add remote resource dir if available
-                remote_resource_dir = remote_specs.get(rkn, {}).get("resource_dir", "")
-                if remote_resource_dir:
-                    kernel_lines.append(
-                        f"{C}{K_RRES:<{max_key_len}}{N} {remote_resource_dir}"
-                    )
+def get_remote_kernel_specs(ssh_bin, host, remote_python_prefix, remote_specs_cache):
+    """Get remote kernel specifications, using cache if available."""
+    if host not in remote_specs_cache:
+        try:
+            remote_specs_cache[host] = fetch_remote_kernel_specs(
+                ssh_bin,
+                host,
+                str(Path(remote_python_prefix) / "bin" / "python"),
+            )
+        except Exception:
+            remote_specs_cache[host] = {}
 
-                # Add remote interrupt_mode if it exists
-                r_interrupt_mode = remote_kernel_spec.get("interrupt_mode", "")
-                if r_interrupt_mode:
-                    kernel_lines.append(
-                        f"{C}{K_RINT:<{max_key_len}}{N} {r_interrupt_mode}"
-                    )
+    return remote_specs_cache.get(host, {})
 
-            kernel_lines.append(f"{C}{K_TIME:<{max_key_len}}{N} {kernel['timeout']}")
-            if remote_cmd:
-                kernel_lines.append(f"{C}{K_RCMD:<{max_key_len}}{N} {remote_cmd}")
 
-            print("\n".join(kernel_lines), end="\n\n")
+def format_ssh_kernel_info(k_lines, kernel, check_res):
+    """Format SSH kernel information for display."""
+    k_lines.append(f"{C}{K_NAME:<{K_LEN}}{N} {kernel['name']}")
+    k_lines.append(f"{C}{K_DISP:<{K_LEN}}{N} {kernel['display_name']}")
+    k_lines.append(f"{C}{K_RES:<{K_LEN}}{N} {kernel['resource_dir']}")
+    ssh_command = (
+        f"ssh {kernel['host']} jupyter-kernel "
+        f"--KernelApp.kernel_name={kernel['remote_kernel_name']} ..."
+    )
+    k_lines.append(f"{C}{K_CMDS:<{K_LEN}}{N} {ssh_command}")
+    k_lines.append(f"{C}{K_LANG:<{K_LEN}}{N} {kernel['language']}")
+    c = format_check(check_res["ssh_ok"])
+    k_lines.append(f"{C}{K_SSH:<{K_LEN}}{N} {c} {kernel['host']}")
+    c = format_check(check_res["ssh_exec_ok"])
+    k_lines.append(f"{C}{K_SSH_PATH:<{K_LEN}}{N} {c} {check_res['ssh_path']}")
+    c = format_check(check_res["exec_ok"])
+    k_lines.append(f"{C}{K_RPFX:<{K_LEN}}{N} {c} {kernel['remote_python_prefix']}")
+    c = format_check(check_res["kernel_ok"])
+    k_lines.append(f"{C}{K_RKER:<{K_LEN}}{N} {c} {kernel['remote_kernel_name']}")
+    k_lines.append(f"{C}{K_TIME:<{K_LEN}}{N} {kernel['timeout']}")
+
+    if check_res.get("remote_cmd"):
+        k_lines.append(f"{C}{K_RCMD:<{K_LEN}}{N} {check_res['remote_cmd']}")
+
+
+def format_check(check_status):
+    """Format a check result with appropriate color based on boolean status."""
+    if check_status is False:
+        check_symbol = "(x)"
+        color = R
+    elif check_status is True:
+        check_symbol = "(v)"
+        color = G
+    else:  # For None case
+        check_symbol = "(?)"
+        color = C
+
+    return f"{color}{check_symbol}{N}"
 
 
 def add_kernel(args: argparse.Namespace) -> None:
@@ -312,8 +321,8 @@ def add_kernel(args: argparse.Namespace) -> None:
         or not args.remote_kernel_name
     ):
         print(
-            "Error: --display-name, --language, --ssh-host-alias, "
-            + "--remote-python-prefix, and --remote-kernel-name are required"
+            "Error: --display-name, --ssh-host-alias, "
+            "--remote-python-prefix, and --remote-kernel-name are required."
         )
         sys.exit(1)
 
@@ -341,28 +350,47 @@ def add_kernel(args: argparse.Namespace) -> None:
     if kernel_name in existing_specs and not args.replace:
         print(
             f"Error: Kernel '{kernel_name}' already exists. Use --replace to override "
-            + "or specify a different --kernel-name."
+            "or specify a different --kernel-name."
         )
         sys.exit(1)
 
     # Create kernel spec
+    config = {
+        "ssh": args.ssh or None,
+        "ssh_host_alias": args.ssh_host_alias,
+        "remote_python_prefix": args.remote_python_prefix,
+        "remote_kernel_name": args.remote_kernel_name,
+        "remote_kernel_launch_timeout": args.remote_kernel_launch_timeout,
+    }
+
+    fp_jk = Path(sys.executable).parent / "jupyter-kernel"
+    if not fp_jk.is_file():
+        logger.warning(f"Could not find jupyter-kernel command at {fp_jk}")
+        # For now don't exit. People can still fix it manually.
     kernel_spec = {
-        "argv": [],
+        # We populate the argv to allow external apps to launch the kernel "directly".
+        # To ensure the provisioner is used we launch a KernelApp instance locally.
+        "argv": [
+            # We make `python` the first argv because some external apps like, Jupyter
+            # in VS Code, perform extra checks and they expect something like
+            # `python -m ipykernel_launcher -f {connection_file}`. So we emulate that.
+            str(sys.executable),  # should be absolute path
+            str(fp_jk.absolute()),
+            f"--KernelApp.kernel_name={kernel_name}",
+            # The SSHKernelProvisioner is aware of this and will use it if provided.
+            "--KernelManager.connection_file={connection_file}",
+        ],
         "display_name": args.display_name,
-        "language": args.language or "",
         "interrupt_mode": "message",
         "metadata": {
             "kernel_provisioner": {
                 "provisioner_name": "sshpyk-provisioner",
-                "config": {
-                    "ssh_host_alias": args.ssh_host_alias,
-                    "remote_python_prefix": args.remote_python_prefix,
-                    "remote_kernel_name": args.remote_kernel_name,
-                    "remote_kernel_launch_timeout": args.remote_kernel_launch_timeout,
-                },
+                "config": config,
             }
         },
     }
+    if args.language:
+        kernel_spec["language"] = args.language
 
     kernel_dir = Path(ksm.user_kernel_dir) / kernel_name
     kernel_dir.mkdir(parents=True, exist_ok=True)
@@ -402,7 +430,6 @@ def edit_kernel(args: argparse.Namespace) -> None:
         print(f"Error: Kernel '{args.kernel_name}' is not an SSH kernel")
         sys.exit(1)
 
-    # Update kernel spec
     if args.display_name:
         kernel_spec["display_name"] = args.display_name
 
@@ -411,6 +438,8 @@ def edit_kernel(args: argparse.Namespace) -> None:
 
     config = provisioner.get("config", {})
 
+    if args.ssh:
+        config["ssh"] = args.ssh
     if args.ssh_host_alias:
         if not RGX_SSH_HOST_ALIAS.match(args.ssh_host_alias):
             print(f"Error: Invalid SSH host alias '{args.ssh_host_alias}'")
@@ -498,9 +527,7 @@ def main() -> None:
         help="Name for the kernel (default: ssh_<host>_<remote_kernel>)",
     )
     add_parser.add_argument("--display-name", help="Display name for the kernel")
-    add_parser.add_argument(
-        "--language", default="python", help="Kernel language (default: python)"
-    )
+    add_parser.add_argument("--language", help="Kernel language (default: python)")
     add_parser.add_argument("--ssh-host-alias", required=True, help="SSH host alias")
     add_parser.add_argument(
         "--remote-python-prefix",
@@ -511,7 +538,7 @@ def main() -> None:
         "--remote-kernel-name",
         required=True,
         help="Kernel name on the remote system. "
-        + "Use `jupyter kernelspec list` on the remote system to find it.",
+        "Use `jupyter kernelspec list` on the remote system to find it.",
     )
     add_parser.add_argument(
         "--remote-kernel-launch-timeout",
@@ -523,6 +550,11 @@ def main() -> None:
         "--replace",
         action="store_true",
         help="Replace existing kernel with the same name if it exists",
+    )
+    add_parser.add_argument(
+        "--ssh",
+        help="Path to SSH executable on local system. "
+        "If not specified, will be auto-detected.",
     )
     add_parser.set_defaults(func=add_kernel)
 
@@ -546,6 +578,11 @@ def main() -> None:
         "--remote-kernel-launch-timeout",
         type=int,
         help="Timeout for launching the remote kernel",
+    )
+    edit_parser.add_argument(
+        "--ssh",
+        help="Path to SSH executable on local system. "
+        "If not specified, will be auto-detected.",
     )
     edit_parser.set_defaults(func=edit_kernel)
 
