@@ -18,6 +18,10 @@ GET_ALL_SPECS_PY = inline_script(
 )
 
 
+LAUNCH_TIMEOUT = 15
+SHUTDOWN_TIME = 15
+
+
 def verify_local_ssh(
     ssh: Optional[str], log: logging.Logger = logger, name: str = "ssh", lp: str = ""
 ) -> str:
@@ -52,9 +56,9 @@ def verify_ssh_connection(
     host_alias: str,
     log: logging.Logger = logger,
     lp: str = "",
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, str]:
     """Verify that the SSH connection to the remote host is working."""
-    cmd = [ssh, "-q", host_alias, "echo OK"]
+    cmd = [ssh, "-q", host_alias, "uname", "-a"]
     log.debug(f"{lp}Verifying SSH connection to {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
@@ -62,14 +66,15 @@ def verify_ssh_connection(
         text=True,
         check=False,
     )  # type: ignore
-    ok = ret.returncode == 0 and ret.stdout.strip() == "OK"
+    uname = ret.stdout.strip()
+    ok = ret.returncode == 0 and bool(uname)
     if not ok:
-        msg = f"{lp}SSH connection to {host_alias!r} failed: {ret.stdout.strip()!r}"
+        msg = f"{lp}SSH connection to {host_alias!r} failed: {uname = !r}"
         log.error(msg)
     else:
-        msg = f"{lp}SSH connection to {host_alias!r} succeeded."
+        msg = f"{lp}SSH connection to {host_alias!r} succeeded: {uname = !r}"
         log.debug(msg)
-    return ok, msg
+    return ok, msg, uname
 
 
 def verify_rem_executable(

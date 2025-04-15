@@ -10,6 +10,8 @@ from jupyter_client.kernelspec import KernelSpecManager
 
 from .provisioning import RGX_KERNEL_NAME, RGX_SSH_HOST_ALIAS
 from .utils import (
+    LAUNCH_TIMEOUT,
+    SHUTDOWN_TIME,
     fetch_remote_kernel_specs,
     verify_local_ssh,
     verify_rem_executable,
@@ -43,7 +45,8 @@ K_SSH_PATH = "SSH Path:"
 K_RPFX = "Remote Python Prefix:"
 K_RKER = "Remote Kernel Name:"
 K_RLANG = "Remote Language:"
-K_TIME = "Start Timeout:"
+K_TIME = "Launch Timeout:"
+K_TIME_SD = "Shutdown Timeout:"
 K_RCMD = "Remote Command:"
 K_INT = "Interrupt Mode:"
 K_RINT = "Remote Interrupt Mode:"
@@ -63,6 +66,7 @@ ALL_KEYS = [
     K_RKER,
     K_RLANG,
     K_TIME,
+    K_TIME_SD,
     K_RCMD,
     K_INT,
     K_RINT,
@@ -154,7 +158,8 @@ def extract_ssh_kernel_info(name, spec_info, display_name, resource_dir, languag
         "host": config.get("ssh_host_alias", ""),
         "remote_python_prefix": config.get("remote_python_prefix", ""),
         "remote_kernel_name": config.get("remote_kernel_name", ""),
-        "timeout": config.get("remote_kernel_launch_timeout", 60),
+        "launch_timeout": config.get("launch_timeout", LAUNCH_TIMEOUT),
+        "shutdown_timeout": config.get("shutdown_timeout", SHUTDOWN_TIME),
         "ssh": config.get("ssh", None),
     }
 
@@ -217,8 +222,8 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         results["ssh_path"] = ssh_bin
         results["ssh_exec_ok"] = ssh_bin is not None
 
-        # Check SSH connection
-        ssh_ok, _ = verify_ssh_connection(ssh_bin, kernel["host"])
+        # TODO add uname to `list` output
+        ssh_ok, _, _ = verify_ssh_connection(ssh_bin, kernel["host"])
         if not ssh_ok:
             results["ssh_ok"] = False
             return results
@@ -291,8 +296,8 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
     k_lines.append(f"{C}{K_RPFX:<{K_LEN}}{N} {c} {kernel['remote_python_prefix']}")
     c = format_check(check_res["kernel_ok"])
     k_lines.append(f"{C}{K_RKER:<{K_LEN}}{N} {c} {kernel['remote_kernel_name']}")
-    k_lines.append(f"{C}{K_TIME:<{K_LEN}}{N} {kernel['timeout']}")
-
+    k_lines.append(f"{C}{K_TIME:<{K_LEN}}{N} {kernel['launch_timeout']}")
+    k_lines.append(f"{C}{K_TIME_SD:<{K_LEN}}{N} {kernel['shutdown_timeout']}")
     if check_res.get("remote_cmd"):
         k_lines.append(f"{C}{K_RCMD:<{K_LEN}}{N} {check_res['remote_cmd']}")
 
@@ -360,8 +365,11 @@ def add_kernel(args: argparse.Namespace) -> None:
         "ssh_host_alias": args.ssh_host_alias,
         "remote_python_prefix": args.remote_python_prefix,
         "remote_kernel_name": args.remote_kernel_name,
-        "remote_kernel_launch_timeout": args.remote_kernel_launch_timeout,
     }
+    if args.launch_timeout:
+        config["launch_timeout"] = args.launch_timeout
+    if args.shutdown_timeout:
+        config["shutdown_timeout"] = args.shutdown_timeout
 
     fp_jk = Path(sys.executable).parent / "jupyter-kernel"
     if not fp_jk.is_file():
@@ -381,6 +389,7 @@ def add_kernel(args: argparse.Namespace) -> None:
             "--KernelManager.connection_file={connection_file}",
         ],
         "display_name": args.display_name,
+        "language": args.language,
         "interrupt_mode": "message",
         "metadata": {
             "kernel_provisioner": {
@@ -389,8 +398,6 @@ def add_kernel(args: argparse.Namespace) -> None:
             }
         },
     }
-    if args.language:
-        kernel_spec["language"] = args.language
 
     kernel_dir = Path(ksm.user_kernel_dir) / kernel_name
     kernel_dir.mkdir(parents=True, exist_ok=True)
@@ -457,8 +464,10 @@ def edit_kernel(args: argparse.Namespace) -> None:
             sys.exit(1)
         config["remote_kernel_name"] = args.remote_kernel_name
 
-    if args.remote_kernel_launch_timeout:
-        config["remote_kernel_launch_timeout"] = args.remote_kernel_launch_timeout
+    if args.launch_timeout:
+        config["launch_timeout"] = args.launch_timeout
+    if args.shutdown_timeout:
+        config["shutdown_timeout"] = args.shutdown_timeout
 
     # Write updated kernel.json
     with open(kernel_json_path, "w", encoding="utf-8") as f:
@@ -527,7 +536,7 @@ def main() -> None:
         help="Name for the kernel (default: ssh_<host>_<remote_kernel>)",
     )
     add_parser.add_argument("--display-name", help="Display name for the kernel")
-    add_parser.add_argument("--language", help="Kernel language (default: python)")
+    add_parser.add_argument("--language", required=True, help="Kernel language")
     add_parser.add_argument("--ssh-host-alias", required=True, help="SSH host alias")
     add_parser.add_argument(
         "--remote-python-prefix",
@@ -541,10 +550,18 @@ def main() -> None:
         "Use `jupyter kernelspec list` on the remote system to find it.",
     )
     add_parser.add_argument(
-        "--remote-kernel-launch-timeout",
+        "--launch-timeout",
         type=int,
-        default=60,
-        help="Timeout for launching the remote kernel (default: 60)",
+        help=f"Timeout for launching the kernel (default: {LAUNCH_TIMEOUT})",
+    )
+    add_parser.add_argument(
+        "--shutdown-timeout",
+        type=int,
+        default=SHUTDOWN_TIME,
+        help=f"Timeout for shutting down the kernel (default: {SHUTDOWN_TIME}). "
+        "If the kernel does not shutdown within this time, "
+        "it will be killed forcefully, "
+        "after which an equal amount of time will be waited for the kernel to exit.",
     )
     add_parser.add_argument(
         "--replace",
@@ -575,9 +592,17 @@ def main() -> None:
         + "Use `jupyter kernelspec list` on the remote system to find it.",
     )
     edit_parser.add_argument(
-        "--remote-kernel-launch-timeout",
+        "--launch-timeout",
         type=int,
-        help="Timeout for launching the remote kernel",
+        help="Timeout for launching the kernel",
+    )
+    edit_parser.add_argument(
+        "--shutdown-timeout",
+        type=int,
+        help=f"Timeout for shutting down the kernel (default: {SHUTDOWN_TIME}). "
+        "If the kernel does not shutdown within this time, "
+        "it will be killed forcefully, "
+        "after which an equal amount of time will be waited for the kernel to exit.",
     )
     edit_parser.add_argument(
         "--ssh",
