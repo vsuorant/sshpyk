@@ -883,7 +883,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 )
             lines = (line.strip() for line in raw_output.splitlines())
             lines = dropwhile(lambda line: line != PS_PREFIX, lines)
-            next(lines)  # skip the PS_PREFIX line
             processes = (
                 dict(zip(["pid", "state", "cmd"], line.split(None, 2)))
                 for line in lines
