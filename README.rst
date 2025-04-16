@@ -29,8 +29,6 @@ See `Installation`_ for more details.
     ServerAliveInterval 10
     ServerAliveCountMax 60000
     TCPKeepAlive yes
-    ControlMaster auto
-    ControlPath ~/.ssh/cm_%r@%h_%p
     # ... the rest of your config, if any
 
 See `Recommended SSH Config Setup`_ for more details.
@@ -232,10 +230,6 @@ Your SSH configuration is typically stored in ``$HOME/.ssh/config``. We recommen
     ServerAliveCountMax 60000
     TCPKeepAlive yes
 
-    # Optional, for extra performance: ControlMaster/ControlPath
-    ControlMaster auto
-    ControlPath ~/.ssh/cm_%r@%h_%p
-
     # ... the rest of your config, if any
 
 ‼️ Important
@@ -243,6 +237,10 @@ Your SSH configuration is typically stored in ``$HOME/.ssh/config``. We recommen
   This is to ensure that your SSH connection is stable and does not get dropped unexpectedly.
   With these settings your connection to the remote kernel should survive, e.g.,
   losing your WiFi connection for a few minutes.
+
+⚠️ Warning
+  The use of ``ControlMaster`` / ``ControlPath`` / ``ControlPersist`` in your SSH alias config has not been tested and is not recommended.
+  If for some reason you do want to use it, make sure to use a dedicated SSH alias for sshpyk purpose and set ``ControlPath`` to a unique value like ``~/.ssh/cm_sshpyk_alias_name_%r@%h_%p``.
 
 With this configuration, you can use ``remote_server_alias`` as your ``--ssh-host-alias`` in ``sshpyk`` commands.
 
