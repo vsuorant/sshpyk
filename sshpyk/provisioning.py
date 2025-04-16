@@ -881,6 +881,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     f"Unexpected return code {res.returncode} from {cmd!r}. "
                     f"Output: {raw_output!r}"
                 )
+                return False, {}
+
             lines = (line.strip() for line in raw_output.splitlines())
             lines = dropwhile(lambda line: line != PS_PREFIX, lines)
             processes = (

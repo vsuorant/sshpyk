@@ -581,7 +581,6 @@ def main() -> None:
     add_parser.add_argument(
         "--shutdown-timeout",
         type=int,
-        default=SHUTDOWN_TIME,
         help=f"Timeout for shutting down the kernel (default: {SHUTDOWN_TIME}). "
         "If the kernel does not shutdown within this time, "
         "it will be killed forcefully, "
