@@ -52,6 +52,7 @@ See `Authentication Requirements`_ for setting up SSH keys.
               --display-name "Remote Python 3.10" \
               --remote-python-prefix /path/to/python/env \
               --remote-kernel-name python3 \
+              --language python
 
 See `Adding a Remote Kernel`_ for all available options.
 
@@ -338,6 +339,23 @@ To auto-format code, apply other small fixes (e.g. trailing whitespace) and to l
 .. code-block:: bash
 
   pre-commit run --all-files
+
+Troubleshooting
+***************
+
+If you are running into issues, try first to restart your system 😉.
+
+To debug problems during kernel launch/shutdown/restart/etc, you can run a command similar to the following to see verbose logs:
+
+.. code-block:: bash
+
+  # `grep SSHPYK` will filter the output to only show sshpyk logs
+  # We use `script` to save the output to a file and `jupyter lab --no-browser --debug`
+  # to run jupyter lab in debug mode. `script` allows to pass input to the jupyter lab
+  script -q jupyter_sshpyk.log jupyter lab --no-browser --debug | grep SSHPYK
+
+This will save the output to a file and show it in real time.
+You can share the log file with us if you are running into issues.
 
 Implementation Details
 **********************
