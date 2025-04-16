@@ -169,6 +169,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     rem_pid_k = None  # to be able to monitor and kill the remote kernel process
 
     rem_proc_cmds = None
+    shutting_down = False
+    is_polling = False
 
     def li(self, msg: str, *args, **kwargs):
         self.log.info(f"{self.log_prefix}{msg}", *args, **kwargs)
@@ -712,6 +714,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # Cache the `restart` arg so that kill/terminate/wait are aware of it
         # See https://github.com/jupyter/jupyter_client/issues/1061 for details.
         self.restart_requested = restart
+        self.shutting_down = True
         self.ld(f"shutdown_requested({restart = })")
 
     async def get_provisioner_info(self) -> Dict:
@@ -804,6 +807,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     f"Timeout for remote KernelApp to terminate after SIGKILL, "
                     f"RPID={self.rem_pid_ka}. Ignoring."
                 )
+        self.shutting_down = False  # reset flag
         self.li(f"Clean up done ({restart = })")
 
     @property
@@ -863,6 +867,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # print the output of ps prefixed with a string so that we can ignore all
             # the output before that
             f"echo '{PS_PREFIX}' && ps -p {pids_str} -o pid,state,{comm}",
+            # ? should we make it more robust and ensure that we got the full output?
+            # E.g.
+            # echo '{PS_PREFIX}'; ps -p 1234; PS_RET_CODE=$?; \
+            # return_code() {return $PS_RET_CODE}; echo '{PS_PREFIX}'; return_code
+            # Probably this is too much of an edge case, but if not and the remote
+            # process actually still exists, we might trigger a kernel restart.
         ]
         # * Don't log, it is called too often.
         # // self.ld(f"Checking remote processes state {cmd = }")
@@ -876,11 +886,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 check=False,
             )
             raw_output = res.stdout.strip()
-            if res.returncode not in (0, 1):
+            # 255 happens for example when ssh gets a `Network is unreachable`
+            if res.returncode not in (0, 1, 255):
                 self.lw(
                     f"Unexpected return code {res.returncode} from {cmd!r}. "
                     f"Output: {raw_output!r}"
                 )
+
+            if res.returncode not in (0, 1):
                 return False, {}
 
             lines = (line.strip() for line in raw_output.splitlines())
@@ -900,6 +913,31 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.le(f"Failed to fetch remote processes state {cmd!r}: {e}")
             return False, {}
 
+    async def ensure_tunnels(self, pid_attr_name: str):
+        """
+        Intended to cover temporary network disconnection upon which the `ssh` commands
+        fail and the tunnels process dies.
+        """
+        pid_tunnels = getattr(self, pid_attr_name)
+        if not pid_tunnels:
+            self.ld(f"{pid_attr_name} = {pid_tunnels}")
+        process = self.processes.get(pid_tunnels, None)  # type: ignore
+        if pid_tunnels and not process:
+            self.ld(f"{pid_attr_name}, {process = }")
+
+        reopen = False
+        if not process:
+            reopen = True
+        elif process.poll() is not None:
+            reopen = True
+            await self.terminate_popen(process)
+
+        if reopen:
+            # don't log verbose, open_kernel_tunnels() logs enough
+            self.ld(f"Tunnels process PID={pid_tunnels} seemed dead, reopening")
+            # ? should add some exponential back off
+            self.open_kernel_tunnels()
+
     async def poll(self) -> Optional[int]:
         """
         Checks if kernel process is still running.
@@ -907,17 +945,30 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         alive. Furthermore, the KernelManager calls this method to check if the kernel
         process has terminated after a shutdown request.
         """
+        if self.is_polling:  # check to avoid race conditions, just in case
+            return None
+        # ! REMINDER: reset on every `return`
+        self.is_polling = True
+
         if not self.rem_pid_k:
+            self.is_polling = False
             return None  # assume all good
+
+        if not self.shutting_down:
+            # Check if tunnels process is still running, if not reopen it.
+            await self.ensure_tunnels("pid_kernel_tunnels")
 
         success, processes = self.fetch_remote_processes_info([self.rem_pid_k])
         if not success:
+            self.is_polling = False
             return None  # for now assume all good, let it poll again
-        is_alive = self.rem_pid_k in processes and not is_zombie(
-            processes[self.rem_pid_k]["state"]
-        )
+
+        zombie = is_zombie(processes.get(self.rem_pid_k, {}).get("state", ""))
+        is_alive = self.rem_pid_k in processes and not zombie
+
         # KernelManager._async_is_alive() expects None if running
         # `1` is just something different from None
+        self.is_polling = False
         return None if is_alive else 1
 
     async def wait_local(self, process: Popen) -> int:
@@ -1055,7 +1106,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
             return RProcResult.SIGNAL_FAILED
 
-    def send_sigterm_to_remote(self, pid: int, signum: int, attempts: int = 3) -> None:
+    def send_sigterm_to_remote(self, pid: int, signum: int, attempts: int = 5) -> None:
         """Terminate the remote process with the given signal."""
         # Can't verify the command of the process, simply send signal and continue
         if not self.rem_proc_cmds or pid not in self.rem_proc_cmds:
@@ -1074,11 +1125,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 continue
             break
 
-        if res != RProcResult.OK:
+        if res == RProcResult.FETCH_FAILED:
             self.lw(
                 f"Failed to verify remote process RPID={pid}, "
-                f"sending {signum} signal skipped"
+                f"continuing with sending signal {signum}"
             )
+        elif res == RProcResult.PROCESS_NOT_FOUND:
+            self.ld(
+                f"Process RPID={pid} not found on remote system, "
+                f"sending signal {signum} skipped"
+            )
+            return
 
         for _ in range(attempts):
             res = self.send_signal_to_remote_process(pid, signum)
@@ -1086,7 +1143,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 break
             if res == RProcResult.SIGNAL_FAILED:
                 continue
-        return
+
         # # After terminate is called, the KernelManager will call self.wait()
         # # which will wait for the remote process to terminate.
 
