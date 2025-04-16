@@ -386,7 +386,7 @@ def add_kernel(args: argparse.Namespace) -> None:
             str(fp_jk.absolute()),
             f"--KernelApp.kernel_name={kernel_name}",
             # The SSHKernelProvisioner is aware of this and will use it if provided.
-            "--KernelManager.connection_file={connection_file}",
+            "--KernelManager.connection_file='{connection_file}'",
         ],
         "display_name": args.display_name,
         "language": args.language,

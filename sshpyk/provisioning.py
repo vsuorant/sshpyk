@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 from enum import Enum, unique
+from itertools import dropwhile
 from pathlib import Path
 from signal import SIGINT, SIGKILL, SIGTERM
 from subprocess import PIPE, Popen, run
@@ -24,6 +25,10 @@ from .utils import (
     verify_ssh_connection,
 )
 
+PS_PREFIX = "===PS_OUTPUT_START==="
+RGX_PS_PREFIX = re.compile(rf"{PS_PREFIX}=(.+)")
+CONN_INFO_PREFIX = "CONNECTION_INFO_JSON"
+RGX_CONN_INFO_PREFIX = re.compile(rf"{CONN_INFO_PREFIX}=(.+)")
 RGX_CONN_FP = re.compile(r"\[KernelApp\].*file: (.*\.json)")
 RGX_CONN_CLIENT = re.compile(r"\[KernelApp\].*client: (.*\.json)")
 PID_PREFIX_KERNEL_APP = "KERNEL_APP_PID"
@@ -214,6 +219,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         match = RGX_PID_KERNEL_APP.search(line)
         if match:
             self.rem_pid_ka = int(match.group(1))
+            self.li(f"Remote KernelApp launched, RPID={self.rem_pid_ka}")
 
         match = RGX_CONN_FP.search(line)
         if match:
@@ -226,6 +232,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     f"{rem_conn_fp_new = } != {self.rem_conn_fp = }."
                 )
             self.rem_conn_fp = rem_conn_fp_new
+            self.li(f"Connection file on remote machine: {self.rem_conn_fp}")
 
         if RGX_CONN_CLIENT.search(line):
             self.rem_ready = True
@@ -261,7 +268,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 line_handlers=[self.extract_rem_info_handler],
                 timeout=timeout,
             )
-            self.li(f"Remote KernelApp launched, RPID={self.rem_pid_ka}")
         except TimeoutError as e:
             msg = f"Timed out ({timeout}s) waiting for connection file information."
             self.le(msg)
@@ -284,7 +290,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.le(msg)
             raise RuntimeError(msg) from e
 
-    def fetch_remote_connection_info(self) -> Dict[str, Any]:
+    def fetch_remote_connection_info(self):
         try:
             # For details on the way the processes are spawned see the Popen call in
             # pre_launch().
@@ -293,7 +299,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 "-q",
                 self.ssh_host_alias,
                 f"echo {PID_PREFIX_KERNEL}=$(pgrep -P {self.rem_pid_ka}); "
-                + f"cat {self.rem_conn_fp!r}",
+                # print the connection file on a single line prefixed with a string
+                # so that we can parse it later
+                + f"echo -n '{CONN_INFO_PREFIX}=' && "
+                + rf"cat {self.rem_conn_fp!r} | tr -d '\n' && echo ''",
             ]
             self.ld(f"Fetching remote connection file/kernel PID {cmd = }")
             res = run(  # noqa: S603
@@ -305,21 +314,32 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 text=True,
                 start_new_session=True,
             )  # type: ignore
-            rem_pid_k, rci_raw = res.stdout.strip().split("\n", 1)
-            rci = json.loads(rci_raw)
-            rci["key"] = rci["key"].encode()  # the rest of the code uses bytes
-            self.rem_conn_info = rci
-            self.ld(f"Connection info remote: {self.rem_conn_info}")
-
-            match = RGX_PID_KERNEL.search(rem_pid_k)
-            if not match:
-                raise ValueError(f"Failed to parse remote kernel PID {rem_pid_k!r}")
-            self.rem_pid_k = int(match.group(1))
-
-            self.li(f"Connection file on remote machine: {self.rem_conn_fp}")
-            self.li(f"Remote kernel launched, RPID={self.rem_pid_k}")
-
-            return self.rem_conn_info
+            # ! The remote machine might print some garbage welcome messages (e.g.
+            # ! by using the `ForceCommand` directive in `/etc/ssh/sshd_config`).
+            lines_raw = res.stdout.strip().splitlines()
+            lines = (line.strip() for line in lines_raw)
+            for line in lines:
+                if not line:
+                    continue
+                match = RGX_CONN_INFO_PREFIX.search(line)
+                if match:
+                    rci_raw = match.group(1)
+                    rci = json.loads(rci_raw)
+                    rci["key"] = rci["key"].encode()  # the rest of the code uses bytes
+                    self.rem_conn_info = rci
+                    self.li(f"Connection info remote: {self.rem_conn_info}")
+                match = RGX_PID_KERNEL.search(line)
+                if match:
+                    self.rem_pid_k = int(match.group(1))
+                    self.li(f"Remote kernel launched, RPID={self.rem_pid_k}")
+            if not self.rem_pid_k:
+                msg = f"Could not extract remote kernel PID from {lines_raw}"
+                self.le(msg)
+                raise RuntimeError(msg)
+            if not self.rem_conn_info:
+                msg = f"Could not extract connection info from {lines_raw}"
+                self.le(msg)
+                raise RuntimeError(msg)
         except json.JSONDecodeError as e:
             msg = f"Failed to parse remote connection file {res.stdout!r}: {e}"
             self.le(msg)
@@ -838,7 +858,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ssh,
             "-q",
             self.ssh_host_alias,
-            f"ps -p {pids_str} -o pid,state,{comm}",
+            # print the output of ps prefixed with a string so that we can ignore all
+            # the output before that
+            f"echo '{PS_PREFIX}' && ps -p {pids_str} -o pid,state,{comm}",
         ]
         # * Don't log, it is called too often.
         # // self.ld(f"Checking remote processes state {cmd = }")
@@ -851,9 +873,15 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 text=True,
                 check=False,
             )
+            raw_output = res.stdout.strip()
             if res.returncode not in (0, 1):
-                self.lw(f"Unexpected return code {res.returncode} from {cmd!r}")
-            lines = (line.strip() for line in res.stdout.strip().split("\n"))
+                self.lw(
+                    f"Unexpected return code {res.returncode} from {cmd!r}. "
+                    f"Output: {raw_output!r}"
+                )
+            lines = (line.strip() for line in raw_output.splitlines())
+            lines = dropwhile(lambda line: line != PS_PREFIX, lines)
+            next(lines)  # skip the PS_PREFIX line
             processes = (
                 dict(zip(["pid", "state", "cmd"], line.split(None, 2)))
                 for line in lines

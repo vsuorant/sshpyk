@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from pathlib import Path
 from shutil import which
 from subprocess import run
@@ -20,6 +21,10 @@ GET_ALL_SPECS_PY = inline_script(
 
 LAUNCH_TIMEOUT = 15
 SHUTDOWN_TIME = 15
+UNAME_PREFIX = "UNAME_INFO_RESULT"
+RGX_UNAME_PREFIX = re.compile(rf"{UNAME_PREFIX}=(.+)")
+GET_SPECS_PREFIX = "GET_SPECS_RESULT"
+RGX_GET_SPECS_PREFIX = re.compile(rf"{GET_SPECS_PREFIX}=(.+)")
 
 
 def verify_local_ssh(
@@ -58,7 +63,7 @@ def verify_ssh_connection(
     lp: str = "",
 ) -> Tuple[bool, str, str]:
     """Verify that the SSH connection to the remote host is working."""
-    cmd = [ssh, "-q", host_alias, "uname", "-a"]
+    cmd = [ssh, "-q", host_alias, f"echo -n '{UNAME_PREFIX}=' && uname -a"]
     log.debug(f"{lp}Verifying SSH connection to {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
@@ -66,10 +71,20 @@ def verify_ssh_connection(
         text=True,
         check=False,
     )  # type: ignore
-    uname = ret.stdout.strip()
+    raw_output = ret.stdout.strip()
+
+    uname = ""
+    for line in raw_output.splitlines():
+        if not line:
+            continue
+        match = RGX_UNAME_PREFIX.search(line)
+        if match:
+            uname = match.group(1)
+            break
+
     ok = ret.returncode == 0 and bool(uname)
     if not ok:
-        msg = f"{lp}SSH connection to {host_alias!r} failed: {uname = !r}"
+        msg = f"{lp}SSH connection to {host_alias!r} failed: {raw_output = !r}"
         log.error(msg)
     else:
         msg = f"{lp}SSH connection to {host_alias!r} succeeded: {uname = !r}"
@@ -116,7 +131,11 @@ def fetch_remote_kernel_specs(
     Fetch kernel specifications from the remote host using SSH.
     Returns a dictionary of kernel specs from the remote system.
     """
-    cmd = [ssh, host_alias, f"{python} -c '{GET_ALL_SPECS_PY}'"]
+    cmd = [
+        ssh,
+        host_alias,
+        f"echo -n '{GET_SPECS_PREFIX}=' && {python} -c '{GET_ALL_SPECS_PY}'",
+    ]
     log.debug(f"{lp}Fetching remote kernel specs from {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
@@ -128,14 +147,20 @@ def fetch_remote_kernel_specs(
         msg = f"{lp}Failed to fetch remote kernel specs: {ret.stderr.strip()!r}"
         log.error(msg)
         raise RuntimeError(msg)
-
+    raw_output = ret.stdout.strip()
+    lines = raw_output.splitlines()
     try:
-        specs = json.loads(ret.stdout.strip())
-        log.info(
-            f"{lp}Successfully fetched {len(specs)} kernel specs from {host_alias!r}"
-        )
-        return specs
+        for line in lines:
+            if not line:
+                continue
+            match = RGX_GET_SPECS_PREFIX.search(line)
+            if match:
+                specs = json.loads(match.group(1))
+                break
     except json.JSONDecodeError as e:
         msg = f"{lp}Failed to parse remote kernel specs: {e}"
         log.error(msg)
         raise RuntimeError(msg) from e
+
+    log.info(f"{lp}Successfully fetched {len(specs)} kernel specs from {host_alias!r}")
+    return specs
