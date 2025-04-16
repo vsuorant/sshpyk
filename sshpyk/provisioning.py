@@ -148,6 +148,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         default_value=None,
     )
 
+    restart_requested = False
+    log_prefix = ""
+
     processes = None
     pid_kernel_tunnels = None
 
@@ -155,7 +158,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     ports_cached = False
 
-    rem_python = None
     rem_jupyter = None
     rem_sys_name = False
 
@@ -167,9 +169,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     rem_pid_k = None  # to be able to monitor and kill the remote kernel process
 
     rem_proc_cmds = None
-
-    restart_requested = False
-    log_prefix = ""
 
     def li(self, msg: str, *args, **kwargs):
         self.log.info(f"{self.log_prefix}{msg}", *args, **kwargs)
@@ -420,7 +419,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         if self.processes is None:
             self.processes: Dict[int, Popen] = {}  # Dict[pid, Popen]
-
         if self.rem_proc_cmds is None:
             self.rem_proc_cmds: Dict[int, str] = {}  # Dict[pid, cmd]
 
@@ -763,6 +761,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     async def cleanup(self, restart: bool = False) -> None:
         """Clean up resources used by the provisioner."""
+        # ! WARNING: this method might be called multiple times by external code.
+        # ! This might happen when launching the kernel "independently" from the `argv`.
+        # ! Make sure it can be called multiple times after a shutdown without
+        # ! side effects.
         self.ld(f"cleanup({restart = })")
         if self.ports_cached and not restart:
             lpc = LocalPortCache.instance()

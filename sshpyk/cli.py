@@ -51,7 +51,7 @@ K_RCMD = "Remote Command:"
 K_INT = "Interrupt Mode:"
 K_RINT = "Remote Interrupt Mode:"
 K_RRES = "Remote Resource Dir:"
-
+K_RUNAME = "Remote System:"
 
 ALL_KEYS = [
     K_NAME,
@@ -62,6 +62,7 @@ ALL_KEYS = [
     K_LANG,
     K_SSH,
     K_SSH_PATH,
+    K_RUNAME,
     K_RPFX,
     K_RKER,
     K_RLANG,
@@ -117,6 +118,7 @@ def separate_kernels(specs):
         resource_dir = spec_info.get("resource_dir", "")
         argv = " ".join(spec.get("argv", []))
         language = spec.get("language", "")
+        interrupt_mode = spec.get("interrupt_mode", "signal")
 
         # Check if it's an SSH kernel
         metadata = spec.get("metadata", {})
@@ -126,7 +128,12 @@ def separate_kernels(specs):
         if is_ssh:
             ssh_kernels.append(
                 extract_ssh_kernel_info(
-                    name, spec_info, display_name, resource_dir, language
+                    name,
+                    spec_info,
+                    display_name,
+                    resource_dir,
+                    language,
+                    interrupt_mode,
                 )
             )
         else:
@@ -137,13 +144,16 @@ def separate_kernels(specs):
                     "resource_dir": resource_dir,
                     "argv": argv,
                     "language": language,
+                    "interrupt_mode": interrupt_mode,
                 }
             )
 
     return local_kernels, ssh_kernels
 
 
-def extract_ssh_kernel_info(name, spec_info, display_name, resource_dir, language):
+def extract_ssh_kernel_info(
+    name, spec_info, display_name, resource_dir, language, interrupt_mode
+):
     """Extract SSH kernel information from a kernel spec."""
     spec = spec_info.get("spec", {})
     metadata = spec.get("metadata", {})
@@ -160,6 +170,7 @@ def extract_ssh_kernel_info(name, spec_info, display_name, resource_dir, languag
         "remote_kernel_name": config.get("remote_kernel_name", ""),
         "launch_timeout": config.get("launch_timeout", LAUNCH_TIMEOUT),
         "shutdown_timeout": config.get("shutdown_timeout", SHUTDOWN_TIME),
+        "interrupt_mode": interrupt_mode,
         "ssh": config.get("ssh", None),
     }
 
@@ -176,11 +187,10 @@ def print_local_kernels(local_kernels, specs):
         k_lines.append(f"{M}{K_RES:<{K_LEN}}{N} {kernel['resource_dir']}")
         k_lines.append(f"{M}{K_CMD:<{K_LEN}}{N} {kernel['argv']}")
         k_lines.append(f"{M}{K_LANG:<{K_LEN}}{N} {kernel.get('language', '')}")
-
-        # Add interrupt_mode if present
-        interrupt_mode = specs[kernel["name"]].get("spec", {}).get("interrupt_mode", "")
-        if interrupt_mode:
-            k_lines.append(f"{M}{K_INT:<{K_LEN}}{N} {interrupt_mode}")
+        # interrupt_mode defaults to "signal" if not specified
+        k_lines.append(
+            f"{M}{K_INT:<{K_LEN}}{N} {kernel.get('interrupt_mode', 'signal')}"
+        )
 
         print("\n".join(k_lines), end="\n\n")
 
@@ -212,6 +222,9 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         "exec_ok": None,
         "kernel_ok": None,
         "ssh_exec_ok": None,
+        "uname": None,
+        "interrupt_mode_ok": kernel.get("interrupt_mode") == "message",
+        "interrupt_mode_remote": None,
     }
 
     if skip_checks:
@@ -222,11 +235,12 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         results["ssh_path"] = ssh_bin
         results["ssh_exec_ok"] = ssh_bin is not None
 
-        # TODO add uname to `list` output
-        ssh_ok, _, _ = verify_ssh_connection(ssh_bin, kernel["host"])
+        ssh_ok, _, uname = verify_ssh_connection(ssh_bin, kernel["host"])
         if not ssh_ok:
             results["ssh_ok"] = False
             return results
+        else:
+            results["uname"] = uname
 
         if ssh_ok:
             results["ssh_ok"] = True
@@ -254,6 +268,8 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
                 remote_argv = remote_kernel_spec.get("argv", [])
                 if remote_argv:
                     results["remote_cmd"] = " ".join(remote_argv)
+                r_interrupt_mode = remote_kernel_spec.get("interrupt_mode", "signal")
+                results["interrupt_mode_remote"] = r_interrupt_mode
             else:
                 results["kernel_ok"] = False
     except Exception as e:
@@ -288,10 +304,18 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
     )
     k_lines.append(f"{C}{K_CMDS:<{K_LEN}}{N} {ssh_command}")
     k_lines.append(f"{C}{K_LANG:<{K_LEN}}{N} {kernel['language']}")
+    # interrupt_mode defaults to "signal" if not specified, but we always use
+    # "message" in the kernel spec.
+    c = format_check(check_res["interrupt_mode_ok"])
+    k_lines.append(f"{C}{K_INT:<{K_LEN}}{N} {c} {kernel['interrupt_mode']}")
     c = format_check(check_res["ssh_ok"])
     k_lines.append(f"{C}{K_SSH:<{K_LEN}}{N} {c} {kernel['host']}")
     c = format_check(check_res["ssh_exec_ok"])
     k_lines.append(f"{C}{K_SSH_PATH:<{K_LEN}}{N} {c} {check_res['ssh_path']}")
+    if check_res["uname"]:
+        k_lines.append(f"{C}{K_RUNAME:<{K_LEN}}{N} {check_res['uname']}")
+    if check_res["interrupt_mode_remote"]:
+        k_lines.append(f"{C}{K_RINT:<{K_LEN}}{N} {check_res['interrupt_mode_remote']}")
     c = format_check(check_res["exec_ok"])
     k_lines.append(f"{C}{K_RPFX:<{K_LEN}}{N} {c} {kernel['remote_python_prefix']}")
     c = format_check(check_res["kernel_ok"])

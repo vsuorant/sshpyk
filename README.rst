@@ -91,35 +91,38 @@ You can list all available kernels using the :code:`list` command::
     --no-check, -n  Skip remote kernel checks
 
   $ sshpyk list
-  ----- Local Kernel ------
-  Name:                     f310
-  Display Name:             Python 3.10
-  Resource Dir:             /Users/victor/Library/Jupyter/kernels/f310
-  Command:                  /opt/homebrew/anaconda3/envs/f310/bin/python -m ipykernel_launcher -f {connection_file}
-  Language:                 python
-  Interrupt Mode:           signal
+  ---- Local Kernel ----
+  Name:                  f310
+  Display Name:          Python 3.10
+  Resource Dir:          /Users/victor/Library/Jupyter/kernels/f310
+  Command:               /opt/homebrew/anaconda3/envs/f310/bin/python -m ipykernel_launcher -f {connection_file}
+  Language:              python
+  Interrupt Mode:        signal
 
-  ----- Local Kernel ------
-  Name:                     ir
-  Display Name:             R
-  Resource Dir:             /opt/homebrew/anaconda3/envs/g/share/jupyter/kernels/ir
-  Command:                  R --slave -e IRkernel::main() --args {connection_file}
-  Language:                 R
-  Interrupt Mode:           signal
+  ---- Local Kernel ----
+  Name:                  ir
+  Display Name:          R
+  Resource Dir:          /opt/homebrew/anaconda3/envs/g/share/jupyter/kernels/ir
+  Command:               R --slave -e IRkernel::main() --args {connection_file}
+  Language:              R
+  Interrupt Mode:        signal
 
-  ------ SSH Kernel -------
-  Name:                     ssh_mbp_ext
-  Display Name:             Python 3.13 (mbp ext)
-  Resource Dir:             /Users/victor/Library/Jupyter/kernels/ssh_mbp_ext
-  Command (simplified):     ssh mbp_ext jupyter-kernel --KernelApp.kernel_name=python3 ...
-  Language:                 python
-  SSH Host Alias:           (v) mbp_ext
-  SSH Path:                 (v) /opt/homebrew/bin/ssh
-  Remote Python Prefix:     (v) /opt/homebrew/anaconda3/envs/g
-  Remote Kernel Name:       (v) python3
-  Start Timeout:            30
-  Remote Command:           python -m ipykernel_launcher -f {connection_file}
+  ----- SSH Kernel -----
+  Name:                  ssh_mbp_ext
+  Display Name:          Python 3.13 (Remote MBP)
+  Resource Dir:          /Users/victor/Library/Jupyter/kernels/ssh_mbp_ext
+  Command (simplified):  ssh mbp_ext jupyter-kernel --KernelApp.kernel_name=python3 ...
+  Language:              python
+  Interrupt Mode:        (v) message
+  SSH Host Alias:        (v) mbp_ext
+  SSH Path:              (v) /opt/homebrew/bin/ssh
+  Remote System:         Darwin MacBook-Pro 22.6.0 Darwin Kernel Version 22.6.0: Thu Dec  5 23:40:09 PST 2024; root:xnu-8796.141.3.709.7~4/RELEASE_ARM64_T6000 arm64
   Remote Interrupt Mode: signal
+  Remote Python Prefix:  (v) /opt/homebrew/anaconda3/envs/g
+  Remote Kernel Name:    (v) python3
+  Launch Timeout:        15
+  Shutdown Timeout:      15
+  Remote Command:        python -m ipykernel_launcher -f {connection_file}
 
 Adding a Remote Kernel
 ======================
