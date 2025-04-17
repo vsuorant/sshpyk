@@ -8,7 +8,6 @@ from enum import Enum, unique
 from itertools import dropwhile
 from pathlib import Path
 from signal import SIGINT, SIGKILL, SIGTERM
-from subprocess import PIPE, Popen, run
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from jupyter_client.connect import KernelConnectionInfo, LocalPortCache
@@ -152,7 +151,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     restart_requested = False
     log_prefix = ""
 
-    processes = None
+    popen_procs = None
     pid_kernel_tunnels = None
 
     cf_loaded = False
@@ -187,7 +186,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.log.error(f"{self.log_prefix}{msg}", *args, **kwargs)
 
     async def extract_from_process_pipes(
-        self, process: Popen, line_handlers: List[Callable[[str], bool]]
+        self, process: subprocess.Popen, line_handlers: List[Callable[[str], bool]]
     ):
         handlers_done, len_handlers = set(), len(line_handlers)
         # TODO: perhaps refactor this code to use asyncio subprocesses OR
@@ -268,7 +267,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             return True
         return False
 
-    async def extract_from_kernel_launch(self, process: Popen, cmd: List[str]):
+    async def extract_from_kernel_launch(
+        self, process: subprocess.Popen, cmd: List[str]
+    ):
         """
         Extract the remote process PID and connection file path.
 
@@ -325,7 +326,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.le(msg)
             raise RuntimeError(msg) from e
 
-    def fetch_remote_connection_info(self):
+    async def fetch_remote_connection_info(self):
         try:
             # For details on the way the processes are spawned see the Popen call in
             # pre_launch().
@@ -340,18 +341,18 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 + rf"cat {self.rem_conn_fp!r} | tr -d '\n' && echo ''",
             ]
             self.ld(f"Fetching remote connection file/kernel PID {cmd = }")
-            res = run(  # noqa: S603
-                cmd,
-                stdout=PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=PIPE,
-                check=True,
-                text=True,
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.PIPE,
                 start_new_session=True,
-            )  # type: ignore
+            )
+            std_out, _std_err = await proc.communicate()
+            output = std_out.decode().strip()
             # ! The remote machine might print some garbage welcome messages (e.g.
             # ! by using the `ForceCommand` directive in `/etc/ssh/sshd_config`).
-            lines_raw = res.stdout.strip().splitlines()
+            lines_raw = output.splitlines()
             lines = (line.strip() for line in lines_raw)
             for line in lines:
                 if not line:
@@ -362,7 +363,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     rci = json.loads(rci_raw)
                     rci["key"] = rci["key"].encode()  # the rest of the code uses bytes
                     self.rem_conn_info = rci
-                    self.li(f"Connection info remote: {self.rem_conn_info}")
+                    self.ld(f"Connection info remote: {self.rem_conn_info}")
                 match = RGX_PID_KERNEL.search(line)
                 if match:
                     self.rem_pid_k = int(match.group(1))
@@ -376,15 +377,19 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 self.le(msg)
                 raise RuntimeError(msg)
         except json.JSONDecodeError as e:
-            msg = f"Failed to parse remote connection file {res.stdout!r}: {e}"
+            msg = f"Failed to parse remote connection file {output!r}: {e}"
             self.le(msg)
             raise RuntimeError(msg) from e
         except ValueError as e:  # must come after JSONDecodeError
-            msg = f"Failed to parse remote kernel PID {res.stdout!r}: {e}"
+            msg = f"Failed to parse remote kernel PID {output!r}: {e}"
             self.le(msg)
             raise RuntimeError(msg) from e
-        except subprocess.CalledProcessError as e:
-            msg = f"Failed to fetch remote connection file: {e}"
+        except Exception as e:
+            try:
+                ec = f"{e.__class__.__name__}: "
+            except Exception:
+                ec = ""
+            msg = f"Failed to fetch remote connection file: {ec}{e!r}"
             self.le(msg)
             raise RuntimeError(msg) from e
 
@@ -456,8 +461,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         p = Path(self.remote_python_prefix)
         self.rem_jupyter = str(p / "bin" / "jupyter-kernel")
 
-        if self.processes is None:
-            self.processes: Dict[int, Popen] = {}  # Dict[pid, Popen]
+        if self.popen_procs is None:
+            self.popen_procs: Dict[int, subprocess.Popen] = {}  # Dict[pid, Popen]
         if self.rem_proc_cmds is None:
             self.rem_proc_cmds: Dict[int, str] = {}  # Dict[pid, cmd]
 
@@ -552,13 +557,16 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         # The way the processes are spawned is very important.
         # See launch_kernel() source code in jupyter_client for details.
-        process = Popen(  # noqa: S603
+        process = subprocess.Popen(  # noqa: S603
             cmd,
-            stdout=PIPE,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             # Essential in order to not mess up the stdin of the local jupyter process
             # that is managing our local "fake" kernel.
-            stdin=PIPE,
+            stdin=subprocess.PIPE,
+            # https://docs.python.org/3.9/library/subprocess.html#subprocess.Popen
+            # "If start_new_session is true the setsid() system call will be made in the
+            # child process prior to the execution of the subprocess. (POSIX only)"
             # Ensures that when the jupyter server is requested to shutdown, with e.g.
             # a Ctrl-C in the terminal, our child processes are not terminated abruptly
             # causing jupyter to try to launch them again, etc..
@@ -566,7 +574,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             bufsize=1,  # return one line at a time
             universal_newlines=True,
         )
-        self.processes[process.pid] = process
+        self.popen_procs[process.pid] = process
         # Preserving the key is essential for kernel restarts and for
         # externally-provided connection files.
         # Communicate the session key to the remote process securely using the stdin
@@ -584,7 +592,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         await self.terminate_popen(process)
 
         # Always fetch the remote connection info to forward to the correct ports
-        self.fetch_remote_connection_info()
+        await self.fetch_remote_connection_info()
 
         if not self.rem_pid_ka or not self.rem_pid_k:
             msg = f"Unexpected RPIDs: {self.rem_pid_ka = }, {self.rem_pid_k = }"
@@ -593,7 +601,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         for _ in range(5):  # Try a few times for robustness
             pids = [self.rem_pid_ka, self.rem_pid_k]
-            success, proc_info = self.fetch_remote_processes_info(pids)
+            success, proc_info = await self.fetch_remote_processes_info(pids)
             if not success:
                 await asyncio.sleep(0.2)
                 continue
@@ -625,7 +633,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # NB `cmd` arg is passed in bc it is expected inside the KernelManager
         return await super().pre_launch(cmd=[], **kwargs)
 
-    async def terminate_popen(self, process: Popen) -> None:
+    async def terminate_popen(self, process: subprocess.Popen) -> None:
         process.terminate()
         try:
             await asyncio.wait_for(
@@ -667,17 +675,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ssh_host_alias,
         ]
         self.ld(f"Setting up kernel SSH tunnels {cmd = }")
-        process = Popen(  # noqa: S603
+        process = subprocess.Popen(  # noqa: S603
             cmd,
-            stdout=PIPE,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            stdin=PIPE,
+            stdin=subprocess.PIPE,
             start_new_session=True,
             bufsize=1,
             universal_newlines=True,
         )
         self.pid_kernel_tunnels = process.pid
-        self.processes[process.pid] = process
+        self.popen_procs[process.pid] = process
         process.stdin.close()
         self.li(f"SSH tunnels for kernel ports launched, PID={process.pid}")
 
@@ -720,7 +728,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.connection_info = km.get_connection_info()
         self.ld(f"Connection info local: {self.connection_info}")
 
-        self.li("Kernel launched")  # just to signal everything should be ready
+        self.li("Done launching kernel")  # just to signal everything should be ready
         return self.connection_info
 
     async def shutdown_requested(self, restart: bool = False):
@@ -746,7 +754,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # See https://github.com/jupyter/jupyter_client/issues/1061 for details.
         self.restart_requested = restart
         self.shutting_down = True
-        self.ld(f"shutdown_requested({restart = })")
+        self.li(f"shutdown_requested({restart = })")
 
     async def get_provisioner_info(self) -> Dict:
         """
@@ -808,7 +816,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ports_cached = False
 
         self.ld(f"Terminating local process(es) ({restart = })")
-        for _pid, p in list(self.processes.items()):
+        for _pid, p in list(self.popen_procs.items()):
             await self.terminate_popen(p)
         self.ld(f"Local process(es) terminated ({restart = })")
 
@@ -820,7 +828,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         timeout = self.get_shutdown_wait_time() / 4
         if self.rem_pid_ka:
-            self.send_sigterm_to_remote(self.rem_pid_ka, SIGTERM)
+            await self.send_sigterm_to_remote(self.rem_pid_ka, SIGTERM)
             try:
                 await asyncio.wait_for(self.wait_remote([self.rem_pid_ka]), timeout)
             except asyncio.TimeoutError:
@@ -828,7 +836,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     f"Timeout for remote KernelApp to terminate, "
                     f"RPID={self.rem_pid_ka}. Sending SIGKILL."
                 )
-                self.send_sigterm_to_remote(self.rem_pid_ka, SIGKILL)
+                await self.send_sigterm_to_remote(self.rem_pid_ka, SIGKILL)
 
         if self.rem_pid_ka:  # check again, it might have been cleared
             try:
@@ -877,7 +885,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 setattr(self, attr, None)  # reset
                 del self.rem_proc_cmds[pid]
 
-    def fetch_remote_processes_info(
+    async def fetch_remote_processes_info(
         self, pids: List[int]
     ) -> Tuple[bool, Dict[int, Dict[str, str]]]:
         """Fetch the state of remote processes."""
@@ -908,26 +916,26 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # * Don't log, it is called too often.
         # // self.ld(f"Checking remote processes state {cmd = }")
         try:
-            res = run(  # noqa: S603
-                cmd,
-                stdout=PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=PIPE,
-                text=True,
-                check=False,
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.PIPE,
+                start_new_session=True,
             )
-            raw_output = res.stdout.strip()
+            std_out, _std_err = await proc.communicate()
+            output = std_out.decode().strip()
             # 255 happens for example when ssh gets a `Network is unreachable`
-            if res.returncode not in (0, 1, 255):
+            if proc.returncode not in (0, 1, 255):
                 self.lw(
-                    f"Unexpected return code {res.returncode} from {cmd!r}. "
-                    f"Output: {raw_output!r}"
+                    f"Unexpected return code {proc.returncode} from {cmd!r}. "
+                    f"Output: {output!r}"
                 )
 
-            if res.returncode not in (0, 1):
+            if proc.returncode not in (0, 1):
                 return False, {}
 
-            lines = (line.strip() for line in raw_output.splitlines())
+            lines = (line.strip() for line in output.splitlines())
             lines = dropwhile(lambda line: line != PS_PREFIX, lines)
             processes = (
                 dict(zip(["pid", "state", "cmd"], line.split(None, 2)))
@@ -940,8 +948,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.clear_remote_pids(pids, processes)
 
             return True, processes
-        except subprocess.CalledProcessError as e:
-            self.le(f"Failed to fetch remote processes state {cmd!r}: {e}")
+        except Exception as e:
+            try:
+                ec = f"{e.__class__.__name__}: "
+            except Exception:
+                ec = ""
+            self.le(f"Failed to fetch remote processes state {cmd!r}: {ec}{e}")
             return False, {}
 
     async def ensure_tunnels(self, pid_attr_name: str):
@@ -953,7 +965,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if not pid_tunnels:
             self.ld(f"{pid_attr_name} = {pid_tunnels}")
 
-        process = self.processes.get(pid_tunnels, None)  # type: ignore
+        process = self.popen_procs.get(pid_tunnels, None)  # type: ignore
         if pid_tunnels and not process:
             self.ld(f"{pid_attr_name}, {process = }")
 
@@ -993,7 +1005,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # Check if tunnels process is still running, if not reopen it.
             await self.ensure_tunnels("pid_kernel_tunnels")
 
-        success, processes = self.fetch_remote_processes_info([self.rem_pid_k])
+        success, processes = await self.fetch_remote_processes_info([self.rem_pid_k])
         if not success:
             self.is_polling = False
             return None  # for now assume all good, let it poll again
@@ -1006,7 +1018,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.is_polling = False
         return None if is_alive else 1
 
-    async def wait_local(self, process: Popen) -> int:
+    async def wait_local(self, process: subprocess.Popen) -> int:
         """Wait for a local process to terminate."""
         while process.poll() is None:
             await asyncio.sleep(0.1)  # Wait for process to terminate
@@ -1021,8 +1033,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 fid.close()  # Close file descriptor
             except BrokenPipeError:
                 self.ld(f"[Process {process.pid}] BrokenPipeError when closing {attr}")
-        if process.pid in self.processes:
-            del self.processes[process.pid]
+        if process.pid in self.popen_procs:
+            del self.popen_procs[process.pid]
         if process.pid == self.pid_kernel_tunnels:
             self.pid_kernel_tunnels = None
         return ret
@@ -1037,7 +1049,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             return
         while True:
             pids_fetch = pids + (pids_extra or [])
-            success, processes = self.fetch_remote_processes_info(pids_fetch)
+            success, processes = await self.fetch_remote_processes_info(pids_fetch)
             if not success:
                 continue  # ignore, let it try again, handle better later if needed
             pids_alive = [
@@ -1076,9 +1088,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         """
         self.lw(f"Unexpected `send_signal` call ({signum = })")
 
-    def verify_remote_process(self, pid: int) -> RProcResult:
+    async def verify_remote_process(self, pid: int) -> RProcResult:
         """Verify the process exists and matches expected command."""
-        success, processes = self.fetch_remote_processes_info([pid])
+        success, processes = await self.fetch_remote_processes_info([pid])
         if not success:
             return RProcResult.FETCH_FAILED
         if pid not in processes:
@@ -1101,9 +1113,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         restart = self.restart_requested or restart
         self.lw(f"kill({restart = })")
         if self.rem_pid_k:
-            self.send_sigterm_to_remote(self.rem_pid_k, SIGKILL)
+            await self.send_sigterm_to_remote(self.rem_pid_k, SIGKILL)
 
-    def send_signal_to_remote_process(self, pid: int, signum: int) -> RProcResult:
+    async def send_signal_to_remote_process(self, pid: int, signum: int) -> RProcResult:
         if pid is None:  # to protect development mistakes
             raise ValueError("No remote process ID to send signal to")
 
@@ -1111,26 +1123,27 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise ValueError(f"Invalid signal number {signum}")
         try:
             cmd = [self.ssh, "-q", self.ssh_host_alias, f"kill -{signum} {pid}"]
-            res = run(  # noqa: S603
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                stdin=PIPE,
-                check=False,
-                text=True,
-            )  # type: ignore
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.PIPE,
+                start_new_session=True,
+            )
+            std_out, _std_err = await proc.communicate()
+            output = std_out.decode().strip()
             self.ld(f"Sent signal {signum} to remote process, RPID={pid}")
-            if res.returncode == 1:
+            if proc.returncode == 1:
                 self.ld(
                     f"Signal {signum} sent to remote process, RPID={pid}, "
-                    f"but process not found ({res.stdout.strip()!r})"
+                    f"but process not found ({output!r})"
                 )
                 self.clear_remote_pids([pid], {})
                 return RProcResult.PROCESS_NOT_FOUND
-            elif res.returncode != 0:
+            elif proc.returncode != 0:
                 self.le(
                     f"Failed to send signal {signum} to remote process, RPID={pid}, "
-                    f"{res.returncode = }: {res.stdout.strip()!r}"
+                    f"{proc.returncode = }: {output!r}"
                 )
                 return RProcResult.SIGNAL_FAILED
             return RProcResult.OK
@@ -1141,12 +1154,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
             return RProcResult.SIGNAL_FAILED
 
-    def send_sigterm_to_remote(self, pid: int, signum: int, attempts: int = 5) -> None:
+    async def send_sigterm_to_remote(self, pid: int, signum: int, attempts: int = 5):
         """Terminate the remote process with the given signal."""
         # Can't verify the command of the process, simply send signal and continue
         if not self.rem_proc_cmds or pid not in self.rem_proc_cmds:
             for _ in range(attempts):
-                res = self.send_signal_to_remote_process(pid, signum)
+                res = await self.send_signal_to_remote_process(pid, signum)
                 if res in (RProcResult.OK, RProcResult.PROCESS_NOT_FOUND):
                     break
                 if res == RProcResult.SIGNAL_FAILED:
@@ -1155,7 +1168,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         # Do a careful verification of the remote process before sending sign
         for _ in range(attempts):
-            res = self.verify_remote_process(pid)
+            res = await self.verify_remote_process(pid)
             if res == RProcResult.FETCH_FAILED:
                 continue
             break
@@ -1173,7 +1186,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             return
 
         for _ in range(attempts):
-            res = self.send_signal_to_remote_process(pid, signum)
+            res = await self.send_signal_to_remote_process(pid, signum)
             if res in (RProcResult.OK, RProcResult.PROCESS_NOT_FOUND):
                 break
             if res == RProcResult.SIGNAL_FAILED:
@@ -1192,4 +1205,4 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.ld(f"terminate({restart = })")
         restart = self.restart_requested or restart
         if self.rem_pid_k:
-            self.send_sigterm_to_remote(self.rem_pid_k, SIGTERM)
+            await self.send_sigterm_to_remote(self.rem_pid_k, SIGTERM)
