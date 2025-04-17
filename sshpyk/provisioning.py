@@ -4,7 +4,6 @@ import asyncio
 import json
 import re
 import subprocess
-import time
 from enum import Enum, unique
 from itertools import dropwhile
 from pathlib import Path
@@ -19,12 +18,14 @@ from traitlets import Integer, Unicode
 
 from .utils import (
     LAUNCH_TIMEOUT,
+    RGX_UNAME_PREFIX,
     SHUTDOWN_TIME,
+    UNAME_PREFIX,
     verify_local_ssh,
-    verify_rem_executable,
-    verify_ssh_connection,
 )
 
+EXEC_PREFIX = "JUPYTER_KERNEL_EXEC"
+RGX_EXEC_PREFIX = re.compile(rf"{EXEC_PREFIX}=(\d+)")
 PS_PREFIX = "===PS_OUTPUT_START==="
 RGX_PS_PREFIX = re.compile(rf"{PS_PREFIX}=(.+)")
 CONN_INFO_PREFIX = "CONNECTION_INFO_JSON"
@@ -159,7 +160,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     ports_cached = False
 
     rem_jupyter = None
-    rem_sys_name = False
+    rem_jupyter_ok = None
+    rem_sys_name = None
 
     rem_conn_fp = None
     rem_ready = False
@@ -184,19 +186,20 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     def le(self, msg: str, *args, **kwargs):
         self.log.error(f"{self.log_prefix}{msg}", *args, **kwargs)
 
-    def extract_from_process_pipes(
-        self, process: Popen, line_handlers: List[Callable[[str], bool]], timeout: int
+    async def extract_from_process_pipes(
+        self, process: Popen, line_handlers: List[Callable[[str], bool]]
     ):
-        t0 = time.time()
         handlers_done, len_handlers = set(), len(line_handlers)
-        # NOTE: perhaps we should refactor this code to use asyncio subprocesses OR
-        # Thread + Queue. So far for our usage we always need to wait for the output
+        # TODO: perhaps refactor this code to use asyncio subprocesses OR
+        # Thread + Queue. So far, for our usage we always need to wait for the output
         # of the processes in order to extract the information we need to fully
-        # launch the remote kernel. However this might block the event loop of Jupyter.
+        # launch the remote kernel. However this blocks the event loop of Jupyter.
         # https://docs.python.org/3/library/asyncio-subprocess.html#asyncio-subprocess
         # https://lucadrf.dev/blog/python-subprocess-buffers/#another-but-better-solution
         # https://stackoverflow.com/a/4896288
         while process.poll() is None:
+            # ! this is a blocking call when there are not lines to read, might become
+            # ! an infinite loop waiting for output to read.
             for line in process.stdout:
                 line = line.strip()
                 if not line:
@@ -211,17 +214,38 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 if len(handlers_done) == len_handlers:
                     self.ld(f"[Process {process.pid}] all handlers done.")
                     return
-                # TODO make async and await a tiny bit
-                if time.time() - t0 > timeout:
-                    raise TimeoutError(timeout)
-        raise RuntimeError(f"Process {process.pid} exited before all handlers done.")
+            await asyncio.sleep(0.01)
+        self.le(
+            f"Process {process.pid} exited with code {process.returncode} before all "
+            f"handlers done, {handlers_done = }"
+        )
 
     def extract_rem_info_handler(self, line: str):
+        match = RGX_UNAME_PREFIX.search(line)
+        if match:
+            self.uname = match.group(1)
+            self.li(f"Remote uname: {self.uname}")
+            self.rem_sys_name = self.uname.split(None, 1)[0]
+            return True
+        return False
+
+    def extract_rem_exec_ok_handler(self, line: str):
+        match = RGX_EXEC_PREFIX.search(line)
+        if match:
+            self.rem_exec_ok = match.group(1) == "0"
+            self.ld(f"Remote {self.rem_jupyter!r} status: {self.rem_exec_ok}")
+            return True
+        return False
+
+    def extract_rem_pid_ka_handler(self, line: str):
         match = RGX_PID_KERNEL_APP.search(line)
         if match:
             self.rem_pid_ka = int(match.group(1))
             self.li(f"Remote KernelApp launched, RPID={self.rem_pid_ka}")
+            return True
+        return False
 
+    def extract_rem_conn_fp_handler(self, line: str):
         match = RGX_CONN_FP.search(line)
         if match:
             rem_conn_fp_new = match.group(1)
@@ -234,18 +258,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 )
             self.rem_conn_fp = rem_conn_fp_new
             self.li(f"Connection file on remote machine: {self.rem_conn_fp}")
-
-        if RGX_CONN_CLIENT.search(line):
-            self.rem_ready = True
-
-        if self.rem_pid_ka and self.rem_conn_fp and self.rem_ready:
             return True
-
         return False
 
-    def extract_rem_pid_and_connection_fp(
-        self, process: Popen, cmd: List[str], timeout: int
-    ):
+    def extract_rem_ready_handler(self, line: str):
+        if RGX_CONN_CLIENT.search(line):
+            self.rem_ready = True
+            self.ld("Remote kernel ready.")
+            return True
+        return False
+
+    async def extract_from_kernel_launch(self, process: Popen, cmd: List[str]):
         """
         Extract the remote process PID and connection file path.
 
@@ -262,17 +285,28 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         a JSON that can be parsed.
         """
         self.rem_ready = False  # reset
-        self.ld(f"Waiting for remote connection file path from {cmd = } ({timeout = })")
+        self.ld(f"Waiting for remote connection file path from {cmd = }")
         try:
-            self.extract_from_process_pipes(
+            future = self.extract_from_process_pipes(
                 process=process,
-                line_handlers=[self.extract_rem_info_handler],
-                timeout=timeout,
+                line_handlers=[
+                    self.extract_rem_info_handler,
+                    self.extract_rem_exec_ok_handler,
+                    self.extract_rem_pid_ka_handler,
+                    self.extract_rem_conn_fp_handler,
+                    self.extract_rem_ready_handler,
+                ],
             )
+            await asyncio.wait_for(future, timeout=self.launch_timeout)
         except TimeoutError as e:
-            msg = f"Timed out ({timeout}s) waiting for connection file information."
+            msg = f"Timed out waiting {self.launch_timeout}s for remote kernel launch."
             self.le(msg)
             raise RuntimeError(msg) from e
+
+        if not self.rem_exec_ok:
+            msg = f"Remote {self.rem_jupyter!r} not found/readable/executable."
+            self.le(msg)
+            raise RuntimeError(msg)
 
         if not self.rem_pid_ka:
             msg = f"Could not extract PID of remote process during {cmd = }"
@@ -413,11 +447,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             km.load_connection_file(cf)
             self.cf_loaded = True
 
-    def pre_launch_verifications(self):
+    def pre_launch_checks(self):
         self.log_prefix = f"[{LOG_NAME}{str(id(self))[-3:]}] "
         k_conf = self.ssh_host_alias, self.remote_python_prefix, self.remote_kernel_name
         if not all(k_conf):
             raise ValueError("Bad kernel configuration.")
+
+        p = Path(self.remote_python_prefix)
+        self.rem_jupyter = str(p / "bin" / "jupyter-kernel")
 
         if self.processes is None:
             self.processes: Dict[int, Popen] = {}  # Dict[pid, Popen]
@@ -426,23 +463,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         # Auto-detect SSH executable if not specified, verify by calling it
         self.ssh = verify_local_ssh(self.ssh, self.log, "ssh", self.log_prefix)
-
-        ssh_conn_ok, msg, uname = verify_ssh_connection(
-            self.ssh, self.ssh_host_alias, self.log, self.log_prefix
-        )
-        if not ssh_conn_ok:
-            raise RuntimeError(f"{msg} See jupyter logs for details.")
-
-        self.li(f"Remote system: {uname}")
-        self.rem_sys_name = uname.split(None, 1)[0]
-
-        p = Path(self.remote_python_prefix)
-        self.rem_jupyter = str(p / "bin" / "jupyter-kernel")
-        ok, msg = verify_rem_executable(
-            self.ssh, self.ssh_host_alias, self.rem_jupyter, self.log, self.log_prefix
-        )
-        if not ok:
-            raise RuntimeError(f"{msg} See jupyter logs for details.")
 
         if self.parent is None:
             raise RuntimeError("Parent KernelManager not set")
@@ -456,10 +476,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         and later in launch_kernel() it sets up the SSH tunnels.
         """
         if not self.restart_requested:
-            self.pre_launch_verifications()
+            self.pre_launch_checks()
 
+        fpj = self.rem_jupyter
         rem_args = [
-            self.rem_jupyter,
+            fpj,
             f"--KernelApp.kernel_name={self.remote_kernel_name}",
             # Generating the configuration file on the remote upfront did not work
             # because the jupyter command on the remote seemed to
@@ -506,7 +527,19 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # remote machine.
         # `exec` ensures the `cmd` will have the same PID output by `echo $$`.
         # For robustness print a variable name and we extract it with regex later
-        cmd = f"echo {PID_PREFIX_KERNEL_APP}=$$; exec nohup {cmd}"
+        cmd_parts = [
+            # Print `uname` of remote system
+            f"echo -n '{UNAME_PREFIX}='",
+            "uname -a",
+            f"FPJ={fpj}",
+            'test -e "$FPJ" && test -r "$FPJ" && test -x "$FPJ"',
+            f"echo {EXEC_PREFIX}=$?",
+            # Print the PID of the remote KernelApp process
+            f"echo {PID_PREFIX_KERNEL_APP}=$$",
+            # Launch the KernelApp
+            f"exec nohup {cmd}",
+        ]
+        cmd = "; ".join(cmd_parts)
         self.ld(f"Remote command {cmd = }")
         cmd = [
             self.ssh,
@@ -545,9 +578,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # KernelApp will start the kernel.
         process.stdin.close()
 
-        self.extract_rem_pid_and_connection_fp(
-            process, cmd, timeout=self.launch_timeout
-        )
+        await self.extract_from_kernel_launch(process=process, cmd=cmd)
         # We are done with the starting the remote kernel. We know its PID to kill it
         # later. Terminate the local process.
         await self.terminate_popen(process)
@@ -636,7 +667,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ssh_host_alias,
         ]
         self.ld(f"Setting up kernel SSH tunnels {cmd = }")
-        process_tunnels = Popen(  # noqa: S603
+        process = Popen(  # noqa: S603
             cmd,
             stdout=PIPE,
             stderr=subprocess.STDOUT,
@@ -645,10 +676,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             bufsize=1,
             universal_newlines=True,
         )
-        self.pid_kernel_tunnels = process_tunnels.pid
-        self.processes[process_tunnels.pid] = process_tunnels
-        process_tunnels.stdin.close()
-        self.li(f"SSH tunnels for kernel ports launched, PID={process_tunnels.pid}")
+        self.pid_kernel_tunnels = process.pid
+        self.processes[process.pid] = process
+        process.stdin.close()
+        self.li(f"SSH tunnels for kernel ports launched, PID={process.pid}")
 
     async def launch_kernel(
         self, cmd: List[str], **kwargs: Any
@@ -921,6 +952,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         pid_tunnels = getattr(self, pid_attr_name)
         if not pid_tunnels:
             self.ld(f"{pid_attr_name} = {pid_tunnels}")
+
         process = self.processes.get(pid_tunnels, None)  # type: ignore
         if pid_tunnels and not process:
             self.ld(f"{pid_attr_name}, {process = }")
@@ -928,9 +960,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         reopen = False
         if not process:
             reopen = True
-        elif process.poll() is not None:
-            reopen = True
-            await self.terminate_popen(process)
+        else:
+            poll = process.poll()
+            if poll is not None:
+                reopen = True
+                self.ld(f"Tunnels process PID={pid_tunnels} seems dead: {poll = }")
+                await self.terminate_popen(process)
 
         if reopen:
             # don't log verbose, open_kernel_tunnels() logs enough
