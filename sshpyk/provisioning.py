@@ -170,7 +170,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     rem_pid_k = None  # to be able to monitor and kill the remote kernel process
 
     rem_proc_cmds = None
-    shutting_down = False
     is_polling = False
 
     def li(self, msg: str, *args, **kwargs):
@@ -753,7 +752,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # Cache the `restart` arg so that kill/terminate/wait are aware of it
         # See https://github.com/jupyter/jupyter_client/issues/1061 for details.
         self.restart_requested = restart
-        self.shutting_down = True
         self.li(f"shutdown_requested({restart = })")
 
     async def get_provisioner_info(self) -> Dict:
@@ -846,7 +844,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     f"Timeout for remote KernelApp to terminate after SIGKILL, "
                     f"RPID={self.rem_pid_ka}. Ignoring."
                 )
-        self.shutting_down = False  # reset flag
         self.li(f"Clean up done ({restart = })")
 
     @property
@@ -992,6 +989,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         alive. Furthermore, the KernelManager calls this method to check if the kernel
         process has terminated after a shutdown request.
         """
+        self.ld(f"{self.is_polling = }, {self.parent.shutting_down = }")  # type: ignore
         if self.is_polling:  # check to avoid race conditions, just in case
             return None
         # ! REMINDER: reset on every `return`
@@ -1001,7 +999,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.is_polling = False
             return None  # assume all good
 
-        if not self.shutting_down:
+        if not self.parent.shutting_down:  # type: ignore
             # Check if tunnels process is still running, if not reopen it.
             await self.ensure_tunnels("pid_kernel_tunnels")
 
@@ -1101,14 +1099,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     async def kill(self, restart: bool = False) -> None:
         """
         Intended to kill the kernel process. This is called by the KernelManager
-        when when a graceful shutdown of the kernel fails, or when the KernelManager
-        requests an immediate shutdown
-        ? When can an immediate shutdown be requested?
-
-        TODO check in detail when should we expect this method to be called.
-        We have seen this method being called if the remote kernel dies unexpectedly.
-        The self.wait()/self.poll() methods are involved too, and potentially
-        get_shutdown_wait_time()/get_stable_start_time().
+        when a graceful shutdown of the kernel fails/times out, or when the
+        KernelManager requests an immediate shutdown.
         """
         restart = self.restart_requested or restart
         self.lw(f"kill({restart = })")
