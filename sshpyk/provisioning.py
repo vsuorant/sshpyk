@@ -43,6 +43,8 @@ RGX_SSH_HOST_ALIAS = re.compile(r"^[a-z0-9_-]+$", re.IGNORECASE)
 
 PNAMES = ("shell_port", "iopub_port", "stdin_port", "hb_port", "control_port")
 
+T_PROC_INFO = Tuple[bool, Dict[int, Dict[str, str]]]
+
 
 @unique
 class RProcResult(Enum):
@@ -151,6 +153,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     restart_requested = False
     log_prefix = ""
 
+    _fetch_remote_processes_lock = None
+    _poll_lock = None
+    _cleanup_lock = None
+    _launch_lock = None
+    _ensure_tunnels_lock = None
+
     popen_procs = None
     pid_kernel_tunnels = None
 
@@ -170,7 +178,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     rem_pid_k = None  # to be able to monitor and kill the remote kernel process
 
     rem_proc_cmds = None
-    is_polling = False
 
     def li(self, msg: str, *args, **kwargs):
         self.log.info(f"{self.log_prefix}{msg}", *args, **kwargs)
@@ -367,6 +374,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 if match:
                     self.rem_pid_k = int(match.group(1))
                     self.li(f"Remote kernel launched, RPID={self.rem_pid_k}")
+
             if not self.rem_pid_k:
                 msg = f"Could not extract remote kernel PID from {lines_raw}"
                 self.le(msg)
@@ -451,7 +459,16 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             km.load_connection_file(cf)
             self.cf_loaded = True
 
-    def pre_launch_checks(self):
+    def pre_launch_init(self):
+        # Initialize locks, these are used to avoid race conditions
+        # between the different async methods that jupyter_client calls.
+        # This was introduced mainly because JupyterLab would often try to restart the
+        # kernel while it was already shutting down or restarting.
+        self._fetch_remote_processes_lock = asyncio.Lock()
+        self._poll_lock = asyncio.Lock()
+        self._cleanup_lock = asyncio.Lock()
+        self._launch_lock = asyncio.Lock()
+        self._ensure_tunnels_lock = asyncio.Lock()
         self.log_prefix = f"[{LOG_NAME}{str(id(self))[-3:]}] "
         k_conf = self.ssh_host_alias, self.remote_python_prefix, self.remote_kernel_name
         if not all(k_conf):
@@ -480,7 +497,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         and later in launch_kernel() it sets up the SSH tunnels.
         """
         if not self.restart_requested:
-            self.pre_launch_checks()
+            self.pre_launch_init()
+        await self._launch_lock.acquire()  # type: ignore
 
         fpj = self.rem_jupyter
         rem_args = [
@@ -604,6 +622,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             if not success:
                 await asyncio.sleep(0.2)
                 continue
+            if not self.rem_pid_k or not self.rem_pid_ka:
+                self.le(
+                    "Remote processes not found on remote system unexpectedly. "
+                    f"RPIDs: {self.rem_pid_ka = }, {self.rem_pid_k = }"
+                )
             break
         else:
             raise RuntimeError(
@@ -622,7 +645,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
         self.rem_proc_cmds = {pid: info["cmd"] for pid, info in proc_info.items()}
 
-        self.open_tunnels()
+        await self.ensure_tunnels(["pid_kernel_tunnels"])
 
         _ = kwargs.pop("extra_arguments", [])  # bc LocalProvisioner does it
 
@@ -654,17 +677,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             msg = f"Failed to kill local process PID={process.pid}, ignoring"
             self.lw(msg)
 
-    def open_tunnels(self) -> None:
-        # ##############################################################################
-        # # After picking the ports, open tunnels ASAP to minimize the chance of a race
-        # # condition on local ports
-        if not self.restart_requested:
-            self.pick_kernel_local_ports()
-        self.open_kernel_tunnels()
-        # ##############################################################################
-
     def open_kernel_tunnels(self) -> None:
         """Open SSH tunnels for kernel communication."""
+        # ##############################################################################
+        # # After picking the ports, open tunnels ASAP to minimize the chance of a race
+        # # condition on local ports (from other processes on the local machine)
+        if not self.restart_requested:
+            self.pick_kernel_local_ports()
         kernel_tunnels = self.make_kernel_tunnels_args()
         cmd = [
             self.ssh,
@@ -683,6 +702,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             bufsize=1,
             universal_newlines=True,
         )
+        # ##############################################################################
         self.pid_kernel_tunnels = process.pid
         self.popen_procs[process.pid] = process
         process.stdin.close()
@@ -760,15 +780,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         NB this method was never called during the development of this provisioner.
         """
         provisioner_info = await super().get_provisioner_info()
-        provisioner_info.update(
-            {
-                "ssh_host_alias": self.ssh_host_alias,
-                "remote_python_prefix": self.remote_python_prefix,
-                "remote_kernel_name": self.remote_kernel_name,
-                "rem_conn_fp": self.rem_conn_fp,
-                "rem_conn_info": self.rem_conn_info,
-            }
-        )
+        # ? Do we need to add anything here?
+        # provisioner_info.update({})
         return provisioner_info
 
     async def load_provisioner_info(self, provisioner_info: Dict) -> None:
@@ -777,11 +790,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         NB this method was never called during the development of this provisioner.
         """
         await super().load_provisioner_info(provisioner_info)
-        self.ssh_host_alias = provisioner_info["ssh_host_alias"]
-        self.remote_python_prefix = provisioner_info["remote_python_prefix"]
-        self.remote_kernel_name = provisioner_info["remote_kernel_name"]
-        self.rem_conn_fp = provisioner_info["rem_conn_fp"]
-        self.rem_conn_info = provisioner_info["rem_conn_info"]
+        # ? Do we need to add anything here?
 
     def get_shutdown_wait_time(self, recommended: Optional[float] = None):
         # x2 because the KernelManager waits 1/2 this time after the shutdown request,
@@ -797,14 +806,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         # kwargs usually contain ['cwd', 'env'], env is a dict
         """
+        self._launch_lock.release()  # type: ignore
         return await super().post_launch(**kwargs)
 
-    async def cleanup(self, restart: bool = False) -> None:
+    async def _cleanup(self, restart: bool = False) -> None:
         """Clean up resources used by the provisioner."""
-        # ! WARNING: this method might be called multiple times by external code.
-        # ! This might happen when launching the kernel "independently" from the `argv`.
-        # ! Make sure it can be called multiple times after a shutdown without
-        # ! side effects.
         self.ld(f"cleanup({restart = })")
         if self.ports_cached and not restart:
             lpc = LocalPortCache.instance()
@@ -844,7 +850,19 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     f"Timeout for remote KernelApp to terminate after SIGKILL, "
                     f"RPID={self.rem_pid_ka}. Ignoring."
                 )
-        self.li(f"Clean up done ({restart = })")
+        self.li(f"Cleanup done ({restart = })")
+
+        if self.rem_pid_ka:
+            self.lw(f"Remote KernelApp RPID={self.rem_pid_ka} was likely not killed")
+            self.rem_pid_ka = None
+
+        if self.rem_pid_k:
+            self.lw(f"Remote kernel RPID={self.rem_pid_k} was likely not killed")
+            self.rem_pid_k = None
+
+    async def cleanup(self, restart: bool = False) -> None:
+        async with self._cleanup_lock:  # type: ignore
+            await self._cleanup(restart)
 
     @property
     def has_process(self) -> bool:
@@ -864,27 +882,31 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 continue
             if pid not in pids:
                 continue
+
+            # Process is not running anymore, reset
             if pid not in processes:
-                self.ld(f"RPID={pid} cleared")
                 setattr(self, attr, None)  # reset
                 if pid in self.rem_proc_cmds:
                     del self.rem_proc_cmds[pid]
+                self.ld(f"RPID={pid} cleared ({attr})")
                 continue
 
             cmd = processes[pid]["cmd"]
             expected_cmd = self.rem_proc_cmds.get(pid, None)
+            # Can happen both when process goes into zombie state or if by a very low
+            # probability a new process was restarted with a different command and now
+            # has the same PID. Either way, reset so that we don't try to kill it again.
             if expected_cmd and cmd != expected_cmd:
                 if not is_zombie(processes[pid]["state"]):
-                    self.le(
-                        f"Command mismatch RPID={pid}. Expected {expected_cmd!r}, "
-                        f"got {cmd!r}"
+                    self.lw(
+                        f"Command mismatch RPID={pid} ({attr}). "
+                        f"Expected {expected_cmd!r}, got {cmd!r}"
                     )
+                self.ld(f"RPID={pid} cleared ({attr}) {processes[pid] = }")
                 setattr(self, attr, None)  # reset
                 del self.rem_proc_cmds[pid]
 
-    async def fetch_remote_processes_info(
-        self, pids: List[int]
-    ) -> Tuple[bool, Dict[int, Dict[str, str]]]:
+    async def _fetch_remote_processes_info(self, pids: List[int]) -> T_PROC_INFO:
         """Fetch the state of remote processes."""
         if not all(map(int, pids)):
             raise ValueError(f"All process IDs must be integers {pids = }")
@@ -953,11 +975,20 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.le(f"Failed to fetch remote processes state {cmd!r}: {ec}{e}")
             return False, {}
 
-    async def ensure_tunnels(self, pid_attr_name: str):
+    async def fetch_remote_processes_info(self, pids: List[int]) -> T_PROC_INFO:
+        async with self._fetch_remote_processes_lock:  # type: ignore
+            res = await self._fetch_remote_processes_info(pids)
+        return res
+
+    async def _ensure_tunnels(self, pid_attr_name: str):
         """
         Intended to cover temporary network disconnection upon which the `ssh` commands
         fail and the tunnels process dies.
         """
+        if pid_attr_name != "pid_kernel_tunnels":
+            # TODO: adapt for SSHFS tunnels
+            raise NotImplementedError(f"Invalid {pid_attr_name = }")
+
         pid_tunnels = getattr(self, pid_attr_name)
         if not pid_tunnels:
             self.ld(f"{pid_attr_name} = {pid_tunnels}")
@@ -966,55 +997,86 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if pid_tunnels and not process:
             self.ld(f"{pid_attr_name}, {process = }")
 
-        reopen = False
+        do_open = False
         if not process:
-            reopen = True
+            do_open = True
         else:
             poll = process.poll()
             if poll is not None:
-                reopen = True
+                do_open = True
                 self.ld(f"Tunnels process PID={pid_tunnels} seems dead: {poll = }")
                 await self.terminate_popen(process)
 
-        if reopen:
+        if do_open:
             # don't log verbose, open_kernel_tunnels() logs enough
-            self.ld(f"Tunnels process PID={pid_tunnels} seemed dead, reopening")
-            # ? should add some exponential back off
-            self.open_kernel_tunnels()
+            self.ld(f"Tunnels process PID={pid_tunnels} not running, (re)opening")
+            if pid_attr_name == "pid_kernel_tunnels":
+                self.open_kernel_tunnels()
 
-    async def poll(self) -> Optional[int]:
+    async def ensure_tunnels(self, pid_attr_names: List[str]):
+        """
+        Ensure the tunnels process is running.
+        """
+        async with self._ensure_tunnels_lock:  # type: ignore
+            futures = [
+                self._ensure_tunnels(pid_attr_name) for pid_attr_name in pid_attr_names
+            ]
+            await asyncio.gather(*futures)
+
+    async def _poll(self) -> Optional[int]:
         """
         Checks if kernel process is still running.
         The KernelManager calls this method regularly to check if the kernel process is
         alive. Furthermore, the KernelManager calls this method to check if the kernel
         process has terminated after a shutdown request.
         """
-        self.ld(f"{self.is_polling = }, {self.parent.shutting_down = }")  # type: ignore
-        if self.is_polling:  # check to avoid race conditions, just in case
+        # * If the launch is in progress, assume all good, avoid restart during launch.
+        if self._launch_lock.locked():  # type: ignore
             return None
-        # ! REMINDER: reset on every `return`
-        self.is_polling = True
 
         if not self.rem_pid_k:
-            self.is_polling = False
+            # Tell the caller all is good so that no action against the kernel is taken.
+            # This is just in case the KernelManager calls poll() while the kernel is
+            # still launching/shutting down.
+            self.ld(f"{self.rem_pid_k = }, let caller assume kernel is running")
             return None  # assume all good
 
         if not self.parent.shutting_down:  # type: ignore
             # Check if tunnels process is still running, if not reopen it.
-            await self.ensure_tunnels("pid_kernel_tunnels")
+            await self.ensure_tunnels(["pid_kernel_tunnels"])
 
+        # ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        # ! Safeguard against shutting down state change during await. This problem was
+        # ! observed at least in JupyterLab. Its AsyncIOLoopKernelRestarter monitors
+        # ! if the kernel is alive and if not, it will attempt to restart it
+        # ! automatically. This goes wrong when: the user requested a shutdown/restart
+        # ! during a .poll() call that already detects the kernel is dead.
+        # ! AsyncIOLoopKernelRestarter is not aware of the more recent shutdown/restart
+        # ! request and will assume the kernel is dead and requires to be restarted.
+        # ! Not the desired behavior in this case.
+        shutting_down = self.parent.shutting_down  # type: ignore
         success, processes = await self.fetch_remote_processes_info([self.rem_pid_k])
+        shutting_down_new = self.parent.shutting_down  # type: ignore
+        if not shutting_down and shutting_down_new:
+            self.ld(f"Shutting down changed {shutting_down} -> {shutting_down_new}")
+            # avoid restart attempts during a shutdown, tell the old caller all was good
+            return None
+        # ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
         if not success:
-            self.is_polling = False
             return None  # for now assume all good, let it poll again
 
         zombie = is_zombie(processes.get(self.rem_pid_k, {}).get("state", ""))
+        # * self.rem_pid_k is reset by clear_remote_pids() if the process is not found
         is_alive = self.rem_pid_k in processes and not zombie
-
         # KernelManager._async_is_alive() expects None if running
         # `1` is just something different from None
-        self.is_polling = False
         return None if is_alive else 1
+
+    async def poll(self) -> Optional[int]:
+        async with self._poll_lock:  # type: ignore
+            res = await self._poll()
+        return res
 
     async def wait_local(self, process: subprocess.Popen) -> int:
         """Wait for a local process to terminate."""
@@ -1042,11 +1104,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     ):
         """Wait for the remote process(es) to terminate."""
         pids = [pid for pid in pids if pid is not None]
+        pids_extra = [pid for pid in (pids_extra or []) if pid is not None]
         if not pids:
             self.ld("No RPIDs to wait for")
             return
         while True:
-            pids_fetch = pids + (pids_extra or [])
+            pids_fetch = pids + pids_extra
             success, processes = await self.fetch_remote_processes_info(pids_fetch)
             if not success:
                 continue  # ignore, let it try again, handle better later if needed
