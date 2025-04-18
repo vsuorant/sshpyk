@@ -29,7 +29,7 @@ from .utils import (
 )
 
 EXEC_PREFIX = "JUPYTER_KERNEL_EXEC"
-RGX_EXEC_PREFIX = re.compile(rf"{EXEC_PREFIX}=(\d+)")
+RGX_EXEC_PREFIX = re.compile(rf"{EXEC_PREFIX}=(\d)")
 PS_PREFIX = "===PS_OUTPUT_START==="
 RGX_PS_PREFIX = re.compile(rf"{PS_PREFIX}=(.+)")
 CONN_INFO_PREFIX = "CONNECTION_INFO_JSON"
@@ -45,6 +45,8 @@ REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
 RGX_KERNEL_NAME = re.compile(r"^[a-z0-9._-]+$", re.IGNORECASE)
 RGX_SSH_HOST_ALIAS = re.compile(r"^[a-z0-9_-]+$", re.IGNORECASE)
 
+EXEC_SSHFS_PREFIX = "SSHFS_EXEC"
+RGX_EXEC_SSHFS_PREFIX = re.compile(rf"{EXEC_SSHFS_PREFIX}=(\d)")
 # E.g. Allocated port 52497 for remote forward to localhost:22
 RGX_SSH_REMOTE_FORWARD_PORT = re.compile(r"Allocated port (\d+) for remote forward")
 PID_PREFIX_SSHFS = "SSHFS_PID"
@@ -221,7 +223,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     ports_cached = False
 
     rem_jupyter = None
-    rem_exec_ok = None
+    rem_jupyter_ok = None
     rem_sys_name = None
 
     rem_conn_fp = None
@@ -233,6 +235,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     rem_proc_cmds = None
 
+    rem_sshfs_ok = None
     ports_sshd_cached = False
     pid_sshfs_tunnels = None
     rem_sshfs_pids = None  # to be able to kill the remote sshfs processes
@@ -295,11 +298,19 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             return True
         return False
 
-    def extract_rem_exec_ok_handler(self, line: str):
+    def extract_rem_jupyter_ok_handler(self, line: str):
         match = RGX_EXEC_PREFIX.search(line)
         if match:
-            self.rem_exec_ok = match.group(1) == "0"
-            self.ld(f"Remote {self.rem_jupyter!r} status: {self.rem_exec_ok}")
+            self.rem_jupyter_ok = match.group(1) == "0"
+            self.ld(f"Remote {self.rem_jupyter!r} status: {self.rem_jupyter_ok}")
+            return True
+        return False
+
+    def extract_rem_sshfs_ok_handler(self, line: str):
+        match = RGX_EXEC_SSHFS_PREFIX.search(line)
+        if match:
+            self.rem_sshfs_ok = match.group(1) == "0"
+            self.ld(f"Remote {self.remote_sshfs!r} status: {self.rem_sshfs_ok}")
             return True
         return False
 
@@ -354,16 +365,20 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         """
         self.rem_ready = False  # reset
         self.ld(f"Waiting for remote connection file path from {cmd = }")
+        do_sshfs = self.sshfs_enabled and not self.rem_sshfs_ok
         try:
+            line_handlers = [
+                self.extract_rem_sys_info_handler,
+                self.extract_rem_jupyter_ok_handler,
+                self.extract_rem_pid_ka_handler,
+                self.extract_rem_conn_fp_handler,
+                self.extract_rem_ready_handler,
+            ]
+            if do_sshfs:
+                line_handlers.append(self.extract_rem_sshfs_ok_handler)
+
             future = self.extract_from_process_pipes(
-                process=process,
-                line_handlers=[
-                    self.extract_rem_sys_info_handler,
-                    self.extract_rem_exec_ok_handler,
-                    self.extract_rem_pid_ka_handler,
-                    self.extract_rem_conn_fp_handler,
-                    self.extract_rem_ready_handler,
-                ],
+                process=process, line_handlers=line_handlers
             )
             await asyncio.wait_for(future, timeout=self.launch_timeout)
         except TimeoutError as e:
@@ -379,8 +394,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.le(msg)
             raise RuntimeError(msg)
 
-        if not self.rem_exec_ok:
+        if not self.rem_jupyter_ok:
             msg = f"Remote {self.rem_jupyter!r} not found/readable/executable."
+            self.le(msg)
+            raise RuntimeError(msg)
+
+        if do_sshfs and not self.rem_sshfs_ok:
+            msg = f"Remote {self.remote_sshfs!r} not found/readable/executable."
             self.le(msg)
             raise RuntimeError(msg)
 
@@ -671,9 +691,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.pre_launch_init()
         await self._launch_lock.acquire()  # type: ignore
 
-        fpj = self.rem_jupyter
+        fpjk = self.rem_jupyter
         rem_args = [
-            fpj,
+            fpjk,
             f"--KernelApp.kernel_name={self.remote_kernel_name}",
             # Generating the configuration file on the remote upfront did not work
             # because the jupyter command on the remote seemed to
@@ -720,13 +740,24 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # remote machine.
         # `exec` ensures the `cmd` will have the same PID output by `echo $$`.
         # For robustness print a variable name and we extract it with regex later
+        cmd_sshfs_parts = [
+            f"FP_SSHFS={self.remote_sshfs}",
+            'test -e "$FP_SSHFS" && test -r "$FP_SSHFS" && test -x "$FP_SSHFS"',
+            f"{EXEC_SSHFS_PREFIX}=$?",
+            f"echo {EXEC_SSHFS_PREFIX}=${EXEC_SSHFS_PREFIX}",
+            # Don't launch the remote kernel if sshfs executable is not available
+            f"if [ ${EXEC_SSHFS_PREFIX} -ne 0 ]; then exit 1; fi",
+        ]
         cmd_parts = [
             # Print `uname` of remote system
             f"echo -n '{UNAME_PREFIX}='",
             "uname -a",
-            f"FPJ={fpj}",
-            'test -e "$FPJ" && test -r "$FPJ" && test -x "$FPJ"',
+            # Check if jupyter-kernel is available on remote system
+            f"FPJK={fpjk}",
+            'test -e "$FPJK" && test -r "$FPJK" && test -x "$FPJK"',
             f"echo {EXEC_PREFIX}=$?",
+            # Check if sshfs is available on remote system
+            *(cmd_sshfs_parts if self.sshfs_enabled and not self.rem_sshfs_ok else []),
             # Print the PID of the remote KernelApp process
             f"echo {PID_PREFIX_KERNEL_APP}=$$",
             # Launch the KernelApp
