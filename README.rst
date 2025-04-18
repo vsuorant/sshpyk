@@ -392,6 +392,14 @@ using SSH key authentication.
 to mount the local directories. For security reasons, ``sshpyk`` will only allow SFTP
 access to the mounted directories.
 
+⚠️ Warning
+  Do not execute more than one kernel with SSHFS mounting (of the same directories)
+  at the same time, ``sshpyk`` does not support this. As a workaround, simply add two
+  ``sshpyk`` kernels for the same machine, but one with SSHFS mounting and one without,
+  and launch as many kernels of the former as you want. If the former kernels need to
+  access the same directories, keep in mind that the kernel with SSHFS mounting must be
+  launched first and kept alive (the SSHFS mounts are unmounted on kernel shutdown).
+
 Requirements
 ------------
 
@@ -416,7 +424,7 @@ Example Setup
 
 1. On the remote system, add an entry to ``~/.ssh/config`` that points back to your local machine
 
-.. code-block:: text
+.. code-block:: bash
 
   Host local_machine_on_remote
     # Keep this to `localhost`
@@ -427,6 +435,14 @@ Example Setup
     # that is authorized on your local machine
     IdentityFile ~/.ssh/id_rsa_authorized_to_ssh_into_your_local_machine
     StrictHostKeyChecking no
+    # Connection stability: ServerAliveInterval/ServerAliveCountMax/TCPKeepAlive
+    ServerAliveInterval 10
+    ServerAliveCountMax 60000
+    TCPKeepAlive yes
+    # Performance and responsiveness: ControlMaster/ControlPath/ControlPersist
+    ControlMaster yes
+    ControlPath ~/.ssh/sshpyk_%r@%h_%p
+    ControlPersist 1m
 
 2. Add a kernel with SSHFS support (or edit and existing one)
 
