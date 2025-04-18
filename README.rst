@@ -32,7 +32,7 @@ See `Installation`_ for more details.
     ServerAliveCountMax 60000
     TCPKeepAlive yes
     ControlMaster yes
-    ControlPath ~/.ssh/sshpyk/%r@%h_%p
+    ControlPath ~/.ssh/sshpyk_%r@%h_%p
     ControlPersist 1m
 
 See `Recommended SSH Config Setup`_ for more details.
@@ -249,7 +249,9 @@ We highly recommend a **dedicated** alias entry that looks like this:
     # remote server. Keep them in a *dedicated* directory to avoid conflicts with other
     # SSH connections and session to the same machine. Sharing the same control socket
     # other non-sshpyk related SSH sessions might have unintended side effects.
-    ControlPath ~/.ssh/sshpyk/%r@%h_%p
+    # Make sure the dirs on the path to the control socket exist, otherwise strange
+    # unrelated errors will popup!
+    ControlPath ~/.ssh/sshpyk_%r@%h_%p
     # Keep the master connection "warm" for 1 minute after the last time the SSH
     # connection was used. For connection stability and to speed up kernel restarts.
     # Note that there will be some SSH process on your local machine still running for

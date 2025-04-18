@@ -225,7 +225,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             f"handlers done, {handlers_done = }"
         )
 
-    def extract_rem_info_handler(self, line: str):
+    def extract_rem_sys_info_handler(self, line: str):
         match = RGX_UNAME_PREFIX.search(line)
         if match:
             self.uname = match.group(1)
@@ -297,7 +297,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             future = self.extract_from_process_pipes(
                 process=process,
                 line_handlers=[
-                    self.extract_rem_info_handler,
+                    self.extract_rem_sys_info_handler,
                     self.extract_rem_exec_ok_handler,
                     self.extract_rem_pid_ka_handler,
                     self.extract_rem_conn_fp_handler,
@@ -309,6 +309,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             msg = f"Timed out waiting {self.launch_timeout}s for remote kernel launch."
             self.le(msg)
             raise RuntimeError(msg) from e
+
+        if not self.rem_sys_name:
+            msg = (
+                f"Check your SSH connection manually `$ ssh {self.ssh_host_alias}`. "
+                f"Could not extract remote system name during {cmd = }."
+            )
+            self.le(msg)
+            raise RuntimeError(msg)
 
         if not self.rem_exec_ok:
             msg = f"Remote {self.rem_jupyter!r} not found/readable/executable."
@@ -916,8 +924,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         pids_str = ",".join(map(str, pids))
         if self.rem_sys_name == "Darwin":
             comm = "command"  # ! On macOS comm/args does not display the full command
-        else:
-            comm = "args"  # ! Not tested (on unix)
+        else:  # assume unix
+            comm = "args"  # ? does this displays the full command on unix?
         cmd = [
             self.ssh,
             "-q",
