@@ -167,7 +167,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     ports_cached = False
 
     rem_jupyter = None
-    rem_jupyter_ok = None
+    rem_exec_ok = None
     rem_sys_name = None
 
     rem_conn_fp = None
