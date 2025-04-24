@@ -12,6 +12,7 @@ license = { text = "BSD-3-Clause" }
 
 [project.scripts]
 sshpyk = "sshpyk.cli:main"
+sshpyk-kernel = "sshpyk.kernelapp:main"
 
 # Integrate with Jupyter Client
 [project.entry-points."jupyter_client.kernel_provisioners"]
