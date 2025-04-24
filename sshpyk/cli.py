@@ -395,9 +395,9 @@ def add_kernel(args: argparse.Namespace) -> None:
     if args.shutdown_timeout:
         config["shutdown_timeout"] = args.shutdown_timeout
 
-    fp_jk = Path(sys.executable).parent / "jupyter-kernel"
-    if not fp_jk.is_file():
-        logger.warning(f"Could not find jupyter-kernel command at {fp_jk}")
+    fp_sk = Path(sys.executable).parent / "sshpyk-kernel"
+    if not fp_sk.is_file():
+        logger.warning(f"Could not find sshpyk-kernel command at {fp_sk}")
         # For now don't exit. People can still fix it manually.
     kernel_spec = {
         # We populate the argv to allow external apps to launch the kernel "directly".
@@ -407,7 +407,7 @@ def add_kernel(args: argparse.Namespace) -> None:
             # in VS Code, perform extra checks and they expect something like
             # `python -m ipykernel_launcher -f {connection_file}`. So we emulate that.
             str(sys.executable),  # should be absolute path
-            str(fp_jk.absolute()),
+            str(fp_sk.absolute()),
             f"--KernelApp.kernel_name={kernel_name}",
             # The SSHKernelProvisioner is aware of this and will use it if provided.
             "--KernelManager.connection_file='{connection_file}'",

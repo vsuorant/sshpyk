@@ -58,12 +58,32 @@ class SSHKernelApp(JupyterApp):
             )
 
     def _handle_stdin(self, fd: int, events: int) -> None:
-        """Handle stdin input, checking for EOF (Ctrl+D) and Ctrl+A."""
+        """Handle stdin input, checking for EOF (Ctrl+D)"""
         try:
             data = os.read(fd, 1)
             if not data:  # EOF detected
                 self.log.info("Received EOF (Ctrl+D)")
-                self.shutdown(0)
+                sys.stdout.write(
+                    "\nQuit? [Y/l/n/r] (Y = shutdown, l = leave w/out kernel shutdown, "
+                    "r = restart, n = abort): "
+                )
+                sys.stdout.flush()
+
+                # Temporarily remove handler to avoid recursion
+                self.loop.remove_handler(fd)
+
+                response = sys.stdin.readline().strip().lower()
+                if response == "" or response == "y":
+                    self.shutdown(0)
+                elif response == "l":
+                    self.leave(0)
+                elif response == "r":
+                    self.restart(0)
+                else:
+                    self.log.info("Quit aborted. No actions taken.")
+
+                # Restore handler
+                self.loop.add_handler(fd, self._handle_stdin, self.loop.READ)
         except (OSError, StreamClosedError):
             # Stream closed, remove the handler
             self.loop.remove_handler(fd)
@@ -113,7 +133,7 @@ class SSHKernelApp(JupyterApp):
         # Avoid SIGCHLD to potentially interfere with other operations
         signal.siginterrupt(signal.SIGCHLD, False)
 
-        self.log.info("You can press Ctrl+D to shutdown the kernel")
+        self.log.info("You can press Ctrl+D to shutdown/restart/leave without shutdown")
 
     def interrupt(self, signo: int) -> None:
         """Interrupt the kernel."""
@@ -133,6 +153,8 @@ class SSHKernelApp(JupyterApp):
         """Leave the application without shutting down the kernel."""
         c = self.__class__.__name__
         msg = f"Leaving {c} on signal {signo}. Remote kernel will not be shutdown!"
+        if signo == 0:
+            msg = "Leaving on Ctrl+D. Remote kernel will not be shutdown!"
         self.log.info(msg)
         is_alive = self.km.is_alive()  # calls provisioner.poll()
         if not is_alive:
@@ -151,7 +173,10 @@ class SSHKernelApp(JupyterApp):
 
     def restart(self, signo: int) -> None:
         """Restart the kernel."""
-        self.log.info(f"Restarting kernel on signal {signo}")
+        msg = f"Restarting kernel on signal {signo}"
+        if signo == 0:
+            msg = "Restarting kernel on Ctrl+D"
+        self.log.info(msg)
         self.km.restart_kernel()
 
     def restart_tunnels(self, signo: int) -> None:

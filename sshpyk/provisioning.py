@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from jupyter_client.connect import KernelConnectionInfo, LocalPortCache
 from jupyter_client.provisioning.provisioner_base import KernelProvisionerBase
 from jupyter_client.session import new_id_bytes
-from traitlets import Integer, Unicode
+from traitlets import Bool, Integer, Unicode
 
 from .utils import (
     LAUNCH_TIMEOUT,
@@ -148,6 +148,16 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         "If None, will be auto-detected using 'which ssh'.",
         allow_none=True,
         default_value=None,
+    )
+    independent_local_processes = Bool(
+        config=True,
+        help="If True, all the local subprocesses are spawned with "
+        "`start_new_session=True` that makes these subprocesses have their own "
+        "process group, instead of inheriting the process group of the parent process."
+        " Some UIs like JupyterLab send SIGINT/SIGTERM/SIGKILL to the kernel's process"
+        "group. This option allows to avoid it. You might want to change it to `False`"
+        "if you are running `sshpyk-kernel` directly and know what you are doing.",
+        default_value=True,
     )
 
     restart_requested = False
@@ -360,7 +370,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 stdin=asyncio.subprocess.PIPE,
-                start_new_session=True,
+                start_new_session=self.independent_local_processes,
             )
             std_out, _std_err = await proc.communicate()
             output = std_out.decode().strip()
@@ -597,7 +607,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # causing jupyter to try to launch them again, etc..
             # As a side effect, some processes might linger around if the process of the
             # kernel manager is forcefully killed with a SIGKILL (e.g. `kill -9`).
-            start_new_session=True,
+            start_new_session=self.independent_local_processes,
             bufsize=1,  # return one line at a time
             universal_newlines=True,
         )
@@ -708,7 +718,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.PIPE,
-            start_new_session=True,
+            start_new_session=self.independent_local_processes,
             bufsize=1,
             universal_newlines=True,
         )
@@ -950,7 +960,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 stdin=asyncio.subprocess.PIPE,
-                start_new_session=True,
+                start_new_session=self.independent_local_processes,
             )
             std_out, _std_err = await proc.communicate()
             output = std_out.decode().strip()
@@ -1193,7 +1203,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 stdin=asyncio.subprocess.PIPE,
-                start_new_session=True,
+                start_new_session=self.independent_local_processes,
             )
             std_out, _std_err = await proc.communicate()
             output = std_out.decode().strip()
