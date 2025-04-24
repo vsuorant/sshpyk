@@ -595,6 +595,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # Ensures that when the jupyter server is requested to shutdown, with e.g.
             # a Ctrl-C in the terminal, our child processes are not terminated abruptly
             # causing jupyter to try to launch them again, etc..
+            # As a side effect, some processes might linger around if the process of the
+            # kernel manager is forcefully killed with a SIGKILL (e.g. `kill -9`).
             start_new_session=True,
             bufsize=1,  # return one line at a time
             universal_newlines=True,

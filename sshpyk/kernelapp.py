@@ -2,16 +2,18 @@
 
 import os
 import signal
-import typing as t
+import sys
 import uuid
-from signal import SIGCHLD, SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2
+from signal import SIGCHLD, SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1
+from typing import Any, Sequence, Union
 
-from jupyter_client import __version__
+from jupyter_client._version import __version__
 from jupyter_client.kernelspec import NATIVE_KERNEL_NAME, KernelSpecManager
 from jupyter_client.manager import KernelManager
 from jupyter_core.application import JupyterApp, base_flags
 from tornado.ioloop import IOLoop
-from traitlets import Unicode
+from tornado.iostream import StreamClosedError
+from traitlets import Bool, Unicode
 
 
 class SSHKernelApp(JupyterApp):
@@ -30,7 +32,14 @@ class SSHKernelApp(JupyterApp):
         help="The name of a kernel type to start",
     )
 
-    def initialize(self, argv: t.Union[str, t.Sequence[str], None] = None) -> None:
+    capture_stdin = Bool(
+        True,
+        config=True,
+        help="Enable handling of Ctrl+D/A to terminate/restart. This has "
+        "no effect in a non-interactive terminal.",
+    )
+
+    def initialize(self, argv: Union[str, Sequence[str], None] = None) -> None:
         """Initialize the application."""
         super().initialize(argv)
 
@@ -40,6 +49,24 @@ class SSHKernelApp(JupyterApp):
         self.km = KernelManager(kernel_name=self.kernel_name, config=self.config)
 
         self.loop = IOLoop.current()
+
+        # Setup stdin handler to detect Ctrl+D (EOF) in an interactive terminal
+        if self.capture_stdin and sys.stdin.isatty():
+            self.log.debug("Setting up stdin listener for Ctrl+D")
+            self.loop.add_handler(
+                sys.stdin.fileno(), self._handle_stdin, self.loop.READ
+            )
+
+    def _handle_stdin(self, fd: int, events: int) -> None:
+        """Handle stdin input, checking for EOF (Ctrl+D) and Ctrl+A."""
+        try:
+            data = os.read(fd, 1)
+            if not data:  # EOF detected
+                self.log.info("Received EOF (Ctrl+D)")
+                self.shutdown(0)
+        except (OSError, StreamClosedError):
+            # Stream closed, remove the handler
+            self.loop.remove_handler(fd)
 
     def setup_signals(self) -> None:
         """Set up signal handlers.
@@ -51,14 +78,13 @@ class SSHKernelApp(JupyterApp):
             return
 
         self.log.info("Setting up signal handlers")
-        self.log.info(f"{getattr(self, 'restart', None)=}")
 
-        def shutdown_handler(signo: int, frame: t.Any) -> None:
+        def shutdown_handler(signo: int, frame: Any) -> None:
             if signo == SIGINT:
                 self.loop.add_callback_from_signal(self.interrupt, signo)
             elif signo == SIGUSR1:
                 self.loop.add_callback_from_signal(self.restart, signo)
-            elif signo == SIGUSR2:
+            elif signo == SIGQUIT:
                 self.loop.add_callback_from_signal(self.leave, signo)
             elif signo == SIGCHLD:
                 self.loop.add_callback_from_signal(self.restart_tunnels, signo)
@@ -70,10 +96,12 @@ class SSHKernelApp(JupyterApp):
         for sig, msg in (
             (SIGHUP, "to shutdown the kernel"),
             (SIGTERM, "to shutdown the kernel"),
-            (SIGQUIT, "or press Ctrl+\\ to shutdown the kernel"),
             (SIGINT, "or press Ctrl+C to interrupt the kernel"),
             (SIGUSR1, "to restart the kernel"),
-            (SIGUSR2, f"to exit this {c} without shutting down the kernel"),
+            (
+                SIGQUIT,
+                f"or press Ctrl+\\ to quit this {c} without shutting down the kernel",
+            ),
         ):
             signal.signal(sig, shutdown_handler)
             self.log.info(f"You can send {sig!r} {msg}")
@@ -85,6 +113,8 @@ class SSHKernelApp(JupyterApp):
         # Avoid SIGCHLD to potentially interfere with other operations
         signal.siginterrupt(signal.SIGCHLD, False)
 
+        self.log.info("You can press Ctrl+D to shutdown the kernel")
+
     def interrupt(self, signo: int) -> None:
         """Interrupt the kernel."""
         self.log.info(f"Interrupting kernel on signal {signo}")
@@ -92,7 +122,10 @@ class SSHKernelApp(JupyterApp):
 
     def shutdown(self, signo: int) -> None:
         """Shut down the application."""
-        self.log.info(f"Shutting down on signal {signo}")
+        msg = f"Shutting down on signal {signo}"
+        if signo == 0:
+            msg = "Shutting down on Ctrl+D"
+        self.log.info(msg)
         self.km.shutdown_kernel()
         self.loop.stop()
 
@@ -119,6 +152,7 @@ class SSHKernelApp(JupyterApp):
     def restart(self, signo: int) -> None:
         """Restart the kernel."""
         self.log.info(f"Restarting kernel on signal {signo}")
+        self.km.restart_kernel()
 
     def restart_tunnels(self, signo: int) -> None:
         """
@@ -142,8 +176,8 @@ class SSHKernelApp(JupyterApp):
                     break
                 self.log.debug(f"Reaped process {pid} with status {status}")
                 ripped = True
-            except ChildProcessError as e:
-                self.log.debug(f"{e}")
+            except ChildProcessError:
+                # self.log.debug(f"{e}") # [Errno 10] No child processes
                 break
             except OSError as e:
                 ec = e.__class__.__name__
