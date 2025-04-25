@@ -28,12 +28,14 @@ See `Installation`_ for more details.
     User my_user_name_on_remote_server # EDIT THIS
     IdentityFile ~/.ssh/private_key_for_remote_server # EDIT THIS
     StrictHostKeyChecking no
-    ServerAliveInterval 10
-    ServerAliveCountMax 60000
+    ServerAliveInterval 5
+    ServerAliveCountMax 120000
     TCPKeepAlive yes
-    ControlMaster yes
+    ControlMaster auto
     ControlPath ~/.ssh/sshpyk_%r@%h_%p
-    ControlPersist 1m
+    ControlPersist 10m
+    ConnectionAttempts 1
+    ConnectTimeout 5
 
 See `Recommended SSH Config Setup`_ for more details.
 
@@ -43,7 +45,7 @@ See `Recommended SSH Config Setup`_ for more details.
 
   ssh sshpyk_remote_server
 
-See `Authentication Requirements`_ for setting up SSH keys.
+See `Authentication via Private/Public Key`_ for setting up SSH keys.
 
 4. Add a remote kernel (replace values with your configuration):
 
@@ -86,8 +88,8 @@ Requirements:
 * On the local system: ``sshpyk`` and ``jupyter_client``
 * On the remote system: ``jupyter_client`` (which provides ``jupyter-kernel`` command)
 
-Managing SSH Jupyter Kernels
-****************************
+Managing SSH Jupyter Kernels Specifications
+*******************************************
 
 ``sshpyk`` provides a command-line interface to manage remote Jupyter kernels via SSH tunnels:
 
@@ -183,6 +185,10 @@ You can modify an existing kernel using the ``edit`` command:
 
   $ sshpyk edit --help
 
+💡 Pro tip
+  If you are familiar with Jupyter kernel specifications, you can edit the ``kernel.json``
+  specifications manually in the ``Resource Dir`` for quick changes.
+
 Deleting a Kernel
 =================
 
@@ -209,8 +215,8 @@ Instead we have a `Recommended SSH Config Setup`_ below.
 ℹ️ Note
   Currently, Windows is not supported as neither local nor remote machine.
 
-Recommended SSH Config Setup
-============================
+Recommended SSH Config
+======================
 
 Your SSH configuration is typically stored in ``$HOME/.ssh/config``.
 We highly recommend a **dedicated** alias entry that looks like this:
@@ -226,25 +232,36 @@ We highly recommend a **dedicated** alias entry that looks like this:
     HostName 192.168.1.100 # EDIT THIS
     # Your unix username on the remote system
     User my_user_name_on_remote_server # EDIT THIS
-    # Required for automated login, see `Authentication Requirements` for more details
+    # Required for automated login, see `Authentication via Private/Public Key`_
+    # for more details
     IdentityFile ~/.ssh/private_key_for_remote_server # EDIT THIS
     # ##################################################################################
 
-    # Connection stability: ServerAliveInterval/ServerAliveCountMax/TCPKeepAlive
+    # Connection stability:
+    # ServerAliveInterval/ServerAliveCountMax/TCPKeepAlive/ConnectionAttempts/ConnectTimeout
     # ##################################################################################
     # Send a "heartbeat" to the server every ServerAliveInterval seconds, if no reply,
     # wait ServerAliveCountMax attempts before giving up.
-    ServerAliveInterval 10
+    ServerAliveInterval 5
     # Set some big value, e.g. ServerAliveInterval * ServerAliveCountMax = ~7 days
-    ServerAliveCountMax 60000
+    ServerAliveCountMax 120000
     TCPKeepAlive yes
+    # Shorter ConnectionAttempts/ConnectTimeout helps to reconnect to the kernel faster
+    # when e.g. loosing internet connection temporarily. However if connecting to your
+    # remote host is expected to take a long time, you might need to increase these.
+    ConnectionAttempts 1
+    ConnectTimeout 5
     # ##################################################################################
 
     # Performance and responsiveness: ControlMaster/ControlPath/ControlPersist
     # ##################################################################################
     # Reuse existing connections to the remote server, this speeds up new connections
-    # to the remote server by reusing a "master" connection.
-    ControlMaster yes # DO NOT USE `auto` here, it does not work well with sshpyk.
+    # to the remote server by reusing a "master" connection. If a master connection
+    # is already established, it will be used, otherwise a new one will be created.
+    # `auto` option is also essential for reusing an ssh connection established manually
+    # e.g. when the remote host requires a password and explicitly forbids private key
+    # authentication.
+    ControlMaster auto
     # The path to the control socket, this is used to manage the connection to the
     # remote server. Keep them in a *dedicated* directory to avoid conflicts with other
     # SSH connections and session to the same machine. Sharing the same control socket
@@ -252,11 +269,14 @@ We highly recommend a **dedicated** alias entry that looks like this:
     # Make sure the dirs on the path to the control socket exist, otherwise strange
     # unrelated errors will popup!
     ControlPath ~/.ssh/sshpyk_%r@%h_%p
-    # Keep the master connection "warm" for 1 minute after the last time the SSH
-    # connection was used. For connection stability and to speed up kernel restarts.
+    # Keep the master connection "warm" after the last time the SSH connection was used.
+    # For connection stability and to speed up kernel restarts.
     # Note that there will be some SSH process on your local machine still running for
-    # ~1 minute after the kernel shutdown. This is expected and harmless.
-    ControlPersist 1m
+    # after the kernel shutdown. This is expected and harmless.
+    # When the remote host requires a password, set ControlPersist to a large value,
+    # e.g. `200h` to avoid having to restart the master connection manually and input
+    # the host password.
+    ControlPersist 10m
     # ##################################################################################
 
     # The port on the remote system that SSH server is listening on (22 is the default)
@@ -275,20 +295,21 @@ With this configuration, you can use ``sshpyk_remote_server`` as your ``--ssh-ho
   the ``sshpyk_remote_server`` as well, which might lead to unexpected behavior.
 
 ‼️ Important
+  ``ControlMaster: auto`` is mandatory for ``sshpyk`` to work.
   We highly recommend using the suggested ``ServerAliveInterval``,
-  ``ServerAliveCountMax``, ``TCPKeepAlive``, ``ControlMaster``, ``ControlPath``,
+  ``ServerAliveCountMax``, ``TCPKeepAlive``, ``ControlPath``,
   and ``ControlPersist`` settings.
   This is to ensure that your SSH connection is stable and does not get dropped
   unexpectedly. With these settings your connection to the remote kernel should
   survive, e.g., losing your WiFi connection for a few minutes, and perhaps even
   longer.
 
-Authentication Requirements
-===========================
+Authentication via Private/Public Key
+=====================================
 
-‼️ Important
-  ``sshpyk`` only supports key-based SSH authentication. You must set up SSH key authentication
-  for all remote hosts you intend to use.
+``sshpyk`` expects ``ssh`` commands to run without password prompts.
+We recommend using private/public key-based SSH authentication.
+You must set up SSH key authentication for all remote hosts you intend to use.
 
 To set up SSH key-based authentication:
 
@@ -322,8 +343,63 @@ Or manually add the contents of ``~/.ssh/private_key_for_remote_server.pub`` fro
 
   ssh sshpyk_remote_server
 
-Advanced: Using Bastion/Jump Hosts
-==================================
+Alternatives to Private/Public Key Authentication
+-------------------------------------------------
+
+If the remote ``sshd`` is configured to specifically only allow password authentication,
+you can still use ``sshpyk`` by either:
+
+1. Changing the ``sshd`` configuration to allow private/public key-based authentication (ask your system administrator); or
+2. Manually establishing a master SSH connection first, as described in `Authentication via Password`_; or
+3. Spawning a ``sshd`` on the remote system on a custom port configured to allow private/public key-based authentication and following the instructions above.
+
+Authentication via Password
+===========================
+
+If your remote host doesn't allow private/public key-based authentication and insists
+on password authentication, you can still use ``sshpyk`` by manually establishing a
+master SSH connection first:
+
+1. In your SSH config, set a long ``ControlPersist`` value (or ``ControlPersist=yes`` for an indefinite persistence) to avoid frequent manual password prompts:
+
+.. code-block:: bash
+
+  Host sshpyk_password_server
+    HostName password.example.com
+    User remote-username
+    ControlMaster auto
+    ControlPath ~/.ssh/sshpyk_%r@%h_%p
+    # Set a very long persistence time or ControlPersist=yes for indefinite persistence
+    ControlPersist 200h
+    # ... the rest of the config as described in `Recommended SSH Config Setup`
+
+2. Manually establish the master connection before attempting to start any ``sshpyk`` kernels:
+
+.. code-block:: bash
+
+  # -M = ControlMaster
+  # -f = go to background
+  # -N = do not execute a command on the remote server
+  ssh -M -f -N sshpyk_password_server
+  # You'll be prompted for your password
+
+⚠️ Warning
+  When using password authentication, if the master connection process dies,
+  which happens if you disconnect from internet for a bit,
+  you need to manually run ``ssh -M -f -N sshpyk_password_server`` again to input your password.
+  Afterwards the connection to the remote kernel should be smoothly reestablished.
+
+3. Now add and use your sshpyk kernel as normal, without needing to enter your password again:
+
+.. code-block:: bash
+
+  sshpyk add --ssh-host-alias sshpyk_password_server --kernel-name ssh_remote_python3 ...
+
+The ``ControlMaster`` connection will remain active for the duration specified in ``ControlPersist``,
+allowing ``sshpyk`` to use it seamlessly despite the password requirement.
+
+Using Bastion/Jump Hosts
+========================
 
 One powerful SSH feature is the ability to connect to hosts behind a bastion (jump) server.
 For example in your SSH config you would add the following **dedicated** alias entries:
@@ -346,19 +422,21 @@ For example in your SSH config you would add the following **dedicated** alias e
 
 ‼️ Important
   For connection stability and performance, we highly recommend using the settings
-  described in `Recommended SSH Config Setup` along with using dedicated alias entries.
+  described in `Recommended SSH Config Setup`_ along with using dedicated alias entries.
 
 This configuration allows you to:
 
 1. Connect first to ``bastion.example.com`` as ``bastion-username``
 2. Then tunnel through to ``internal-server.example.com`` as ``remote-username``
 
-When using sshpyk, you would simply specify ``--ssh-host-alias sshpyk_internal_server``
+When using ``sshpyk``, you would simply specify ``--ssh-host-alias sshpyk_internal_server``
 and the SSH tunneling will be handled automatically according to your SSH ``config`` file.
 
 ‼️ Important
-  Remember that SSH key-based authentication must be set up for both the
-  local_machine ``sshpyk_bastion`` host and the ``sshpyk_internal_server``.
+  Remember that SSH automatic authentication must be set up for both
+  ``sshpyk_bastion`` and ``sshpyk_internal_server``, either via SSH private/public key-based
+  authentication or password authentication, as described in `Authentication via Private/Public Key`_
+  and `Authentication via Password`_, respectively.
 
 💡 Tip
   You can of course have as many bastion hosts between you and the remote server as you want.
@@ -388,7 +466,10 @@ Troubleshooting
 
 If you are running into issues, try first to restart your system 😉.
 
-To debug problems during kernel launch/shutdown/restart/etc, you can run a command similar to the following to see verbose logs:
+Make sure you can ``ssh sshpyk_remote_server`` into your remote host without password prompts,
+before attempting to launch the ``sshpyk`` kernel.
+
+To debug problems during kernel launch/shutdown/restart/etc., you can run a command similar to the following to see verbose logs:
 
 .. code-block:: bash
 

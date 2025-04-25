@@ -170,7 +170,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     _ensure_tunnels_lock = None
 
     popen_procs = None
-    pid_kernel_tunnels = None
+    kernel_tunnels_args = None
 
     cf_loaded = False
 
@@ -447,7 +447,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 setattr(km, port_name, p)
             self.ports_cached = True
 
-    def make_kernel_tunnels_args(self) -> List[List[str]]:
+    async def make_kernel_tunnels_args(self):
         """Create SSH tunnel arguments for kernel communication."""
         if not self.rem_conn_info:
             raise RuntimeError(f"Unexpected {self.rem_conn_info = }.")
@@ -456,7 +456,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             local_port = getattr(km, port_name)
             remote_port = self.rem_conn_info[port_name]
             tunnels += ["-L", f"{local_port}:localhost:{remote_port}"]
-        return tunnels
+
+        old_tunnels = self.kernel_tunnels_args
+        # When restarting the kernel, the ports on remote will often change
+        if old_tunnels and tuple(old_tunnels) != tuple(tunnels):
+            await self.close_tunnels(old_tunnels)
+        self.kernel_tunnels_args = tunnels
 
     def load_connection_file(self):
         """
@@ -665,7 +670,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
         self.rem_proc_cmds = {pid: info["cmd"] for pid, info in proc_info.items()}
 
-        await self.ensure_tunnels(["pid_kernel_tunnels"])
+        await self.ensure_tunnels()
 
         _ = kwargs.pop("extra_arguments", [])  # bc LocalProvisioner does it
 
@@ -697,36 +702,89 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             msg = f"Failed to kill local process PID={process.pid}, ignoring"
             self.lw(msg)
 
-    def open_kernel_tunnels(self) -> None:
+    async def open_kernel_tunnels(self):
         """Open SSH tunnels for kernel communication."""
         # ##############################################################################
         # # After picking the ports, open tunnels ASAP to minimize the chance of a race
         # # condition on local ports (from other processes on the local machine)
         if not self.restart_requested:
             self.pick_kernel_local_ports()
-        kernel_tunnels = self.make_kernel_tunnels_args()
+        await self.make_kernel_tunnels_args()  # closes old tunnels if needed
         cmd = [
             self.ssh,
-            "-q",  # mute ssh output
-            "-N",  # do nothing, i.e. maintain the tunnels alive
-            *kernel_tunnels,  # ssh tunnels within the same command
+            "-O",  # mute ssh output
+            "forward",  # do nothing, i.e. maintain the tunnels alive
+            *self.kernel_tunnels_args,  # ssh tunnels within the same command
             self.ssh_host_alias,
         ]
-        self.ld(f"Setting up kernel SSH tunnels {cmd = }")
-        process = subprocess.Popen(  # noqa: S603
-            cmd,
+        self.ld(f"Ensuring kernel tunnels {cmd = }")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             stdin=subprocess.PIPE,
             start_new_session=self.independent_local_processes,
-            bufsize=1,
-            universal_newlines=True,
         )
         # ##############################################################################
-        self.pid_kernel_tunnels = process.pid
-        self.popen_procs[process.pid] = process
-        process.stdin.close()
-        self.li(f"SSH tunnels for kernel ports launched, PID={process.pid}")
+        std_out, _std_err = await proc.communicate()
+        output = std_out.decode().strip()
+        msg = (
+            f"Try again after making sure you have `ControlMaster=auto` in "
+            f"under your dedicated `Host {self.ssh_host_alias}` in your ssh config "
+            f"file (usually `~/.ssh/config`)."
+        )
+        if output:
+            for line in output.splitlines():
+                self.ld(f"[Process {proc.pid}] {line.strip()}")
+                if "control socket" in line.lower():
+                    self.lw(
+                        "You seem to have lost the control socket "
+                        f"(e.g. WiFi disconnected). Make sure {self.ssh_host_alias} is "
+                        "reachable. If you had run "
+                        f"`ssh -M -f -N {self.ssh_host_alias}` "
+                        f"to input the login password for {self.ssh_host_alias} "
+                        "before starting the kernel, you have to manually run it again."
+                    )
+        # The `ssh -O forward` command is expected to exit cleanly (code 0)
+        # 255 is returned if the control socket is lost.
+        if proc.returncode not in (0, 255):
+            msg = (
+                f"Tunnels process PID={proc.pid} exited with unexpected "
+                f"{proc.returncode = }. " + msg
+            )
+            self.le(msg)
+        else:
+            self.ld(f"Tunnels to {self.ssh_host_alias} for kernel ports opened")
+
+    async def close_tunnels(self, tunnels_args: List[str]):
+        cmd = [
+            self.ssh,
+            "-O",  # mute ssh output
+            "cancel",  # do nothing, i.e. maintain the tunnels alive
+            *tunnels_args,  # ssh tunnels within the same command
+            self.ssh_host_alias,
+        ]
+        self.ld(f"Closing tunnels {cmd = }")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE,
+            start_new_session=self.independent_local_processes,
+        )
+        std_out, _std_err = await proc.communicate()
+        output = std_out.decode().strip()
+        if output:
+            for line in output.splitlines():
+                self.ld(f"[Process {proc.pid}] {line.strip()}")
+        if proc.returncode != 0:
+            msg = (
+                f"Cancel tunnels process PID={proc.pid} exited with unexpected "
+                f"{proc.returncode = }."
+            )
+            self.le(msg)
+        else:
+            self.ld(f"Tunnels {tunnels_args} to {self.ssh_host_alias} closed")
 
     async def launch_kernel(
         self, cmd: List[str], **kwargs: Any
@@ -839,10 +897,18 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     lpc.return_port(int(port))  # `int` to ensure type is correct
             self.ports_cached = False
 
-        self.ld(f"Terminating local process(es) ({restart = })")
-        for _pid, p in list(self.popen_procs.items()):
-            await self.terminate_popen(p)
-        self.ld(f"Local process(es) terminated ({restart = })")
+        if self.kernel_tunnels_args:
+            try:
+                await self.close_tunnels(self.kernel_tunnels_args)
+            except Exception as e:
+                self.le(f"Failed to close tunnels {self.kernel_tunnels_args = }: {e}")
+            self.kernel_tunnels_args = None  # reset
+
+        if self.popen_procs:
+            self.ld(f"Terminating local process(es) ({restart = })")
+            for _pid, p in list(self.popen_procs.items()):
+                await self.terminate_popen(p)
+            self.ld(f"Local process(es) terminated ({restart = })")
 
         # Killing the remote kernel process should have happened already either by:
         # KernelManager sending a shutdown request to the kernel's ports,
@@ -1000,48 +1066,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             res = await self._fetch_remote_processes_info(pids)
         return res
 
-    async def _ensure_tunnels(self, pid_attr_name: str):
-        """
-        Intended to cover temporary network disconnection upon which the `ssh` commands
-        fail and the tunnels process dies.
-        """
-        if pid_attr_name != "pid_kernel_tunnels":
-            # TODO: adapt for SSHFS tunnels
-            raise NotImplementedError(f"Invalid {pid_attr_name = }")
-
-        pid_tunnels = getattr(self, pid_attr_name)
-        if not pid_tunnels:
-            self.ld(f"{pid_attr_name} = {pid_tunnels}")
-
-        process = self.popen_procs.get(pid_tunnels, None)  # type: ignore
-        if pid_tunnels and not process:
-            self.ld(f"{pid_attr_name}, {process = }")
-
-        do_open = False
-        if not process:
-            do_open = True
-        else:
-            poll = process.poll()
-            if poll is not None:
-                do_open = True
-                self.ld(f"Tunnels process PID={pid_tunnels} seems dead: {poll = }")
-                await self.terminate_popen(process)
-
-        if do_open:
-            # don't log verbose, open_kernel_tunnels() logs enough
-            self.ld(f"Tunnels process PID={pid_tunnels} not running, (re)opening")
-            if pid_attr_name == "pid_kernel_tunnels":
-                self.open_kernel_tunnels()
-
-    async def ensure_tunnels(self, pid_attr_names: List[str]):
-        """
-        Ensure the tunnels process is running.
-        """
+    async def ensure_tunnels(self):
+        """Ensure the tunnels are being forwarded."""
         async with self._ensure_tunnels_lock:  # type: ignore
-            futures = [
-                self._ensure_tunnels(pid_attr_name) for pid_attr_name in pid_attr_names
-            ]
-            await asyncio.gather(*futures)
+            # When using ControlMaster multiplexing, we have no way of checking which
+            # tunnels have been already forwarded. So we always re(open) the tunnels.
+            # This is not a problem, it is cheap to do. And in case the master
+            # connection has dies, it will be restarted (assuming not password required)
+            await self.open_kernel_tunnels()
 
     async def _poll(self) -> Optional[int]:
         """
@@ -1063,7 +1095,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         if not self.parent.shutting_down:  # type: ignore
             # Check if tunnels process is still running, if not reopen it.
-            await self.ensure_tunnels(["pid_kernel_tunnels"])
+            await self.ensure_tunnels()
 
         # ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         # ! Safeguard against shutting down state change during await. This problem was
@@ -1094,6 +1126,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         return None if is_alive else 1
 
     async def poll(self) -> Optional[int]:
+        self.ld("poll() --------------------------------------------------------------")
         async with self._poll_lock:  # type: ignore
             res = await self._poll()
         return res
@@ -1115,8 +1148,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 self.ld(f"[Process {process.pid}] BrokenPipeError when closing {attr}")
         if process.pid in self.popen_procs:
             del self.popen_procs[process.pid]
-        if process.pid == self.pid_kernel_tunnels:
-            self.pid_kernel_tunnels = None
         return ret
 
     async def wait_remote(

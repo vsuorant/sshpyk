@@ -64,8 +64,9 @@ class SSHKernelApp(JupyterApp):
             if not data:  # EOF detected
                 self.log.info("Received EOF (Ctrl+D)")
                 sys.stdout.write(
-                    "\nQuit? [Y/l/n/r] (Y = shutdown, l = leave w/out kernel shutdown, "
-                    "r = restart, n = abort): "
+                    "[Y/i/l/r/n] (Y = shutdown (default), i = interrupt, "
+                    "l = leave w/out kernel shutdown, r = restart, n = nothing)"
+                    "\nAction? "
                 )
                 sys.stdout.flush()
 
@@ -79,8 +80,10 @@ class SSHKernelApp(JupyterApp):
                     self.leave(0)
                 elif response == "r":
                     self.restart(0)
+                elif response == "i":
+                    self.interrupt(0)
                 else:
-                    self.log.info("Quit aborted. No actions taken.")
+                    self.log.info("No actions taken, resuming")
 
                 # Restore handler
                 self.loop.add_handler(fd, self._handle_stdin, self.loop.READ)
@@ -106,11 +109,11 @@ class SSHKernelApp(JupyterApp):
                 self.loop.add_callback_from_signal(self.restart, signo)
             elif signo == SIGQUIT:
                 self.loop.add_callback_from_signal(self.leave, signo)
-            elif signo == SIGCHLD:
-                self.loop.add_callback_from_signal(self.restart_tunnels, signo)
-            else:
+            elif signo in (SIGTERM, SIGCHLD):
                 self.log.info(f"Shutting down on signal {signo}")
                 self.loop.add_callback_from_signal(self.shutdown, signo)
+            else:
+                self.log.debug(f"Unexpected signal {signo}")
 
         c = self.__class__.__name__
         for sig, msg in (
@@ -126,18 +129,17 @@ class SSHKernelApp(JupyterApp):
             signal.signal(sig, shutdown_handler)
             self.log.info(f"You can send {sig!r} {msg}")
 
-        # Handle SIGCHLD signal which is sent when a child process terminates.
-        # We use this signal to be able to restart the ssh tunnels when they die,
-        # which can happen on internet connection loss.
-        signal.signal(signal.SIGCHLD, shutdown_handler)
-        # Avoid SIGCHLD to potentially interfere with other operations
-        signal.siginterrupt(signal.SIGCHLD, False)
-
-        self.log.info("You can press Ctrl+D to shutdown/restart/leave without shutdown")
+        self.log.info(
+            "You can press Ctrl+D and execute one of these actions: "
+            "interrupt, shutdown, restart or leave (without shutdown)"
+        )
 
     def interrupt(self, signo: int) -> None:
         """Interrupt the kernel."""
-        self.log.info(f"Interrupting kernel on signal {signo}")
+        msg = f"Interrupting kernel on signal {signo}"
+        if signo == 0:
+            msg = "Interrupting kernel on Ctrl+D"
+        self.log.info(msg)
         self.km.interrupt_kernel()
 
     def shutdown(self, signo: int) -> None:
@@ -147,6 +149,9 @@ class SSHKernelApp(JupyterApp):
             msg = "Shutting down on Ctrl+D"
         self.log.info(msg)
         self.km.shutdown_kernel()
+        # self.km.kc.stop_channels()
+        # del self.km.kc
+        # del self.km
         self.loop.stop()
 
     def leave(self, signo: int) -> None:
@@ -179,39 +184,13 @@ class SSHKernelApp(JupyterApp):
         self.log.info(msg)
         self.km.restart_kernel()
 
-    def restart_tunnels(self, signo: int) -> None:
-        """
-        Handle SIGCHLD signal which is sent when a child process terminates.
-        Depending on the unix flavour this signal might be sent as well when a child
-        process is stopped/continued. In principle this should not apply to our
-        ssh tunnels processes.
-        """
-        self.log.debug(f"SIGCHLD received on signal {signo}")
-        ripped = False
-        while True:
-            try:
-                pid = self.km.provisioner.pid_kernel_tunnels or -1
-                # Reap the zombie process, this is the way to make the os stop spamming
-                # us with SIGCHLD signals.
-                # ! We might still get multiple SIGCHLD signals in a row for the same
-                # ! dead process.
-                pid, status = os.waitpid(pid, os.WNOHANG)
-                if pid == 0:
-                    self.log.debug("No zombie processes to reap")
-                    break
-                self.log.debug(f"Reaped process {pid} with status {status}")
-                ripped = True
-            except ChildProcessError:
-                # self.log.debug(f"{e}") # [Errno 10] No child processes
-                break
-            except OSError as e:
-                ec = e.__class__.__name__
-                self.log.debug(f"Unexpected error: {ec}: {e}")
-                break
-
-        if ripped and not self.km.shutting_down:
+    async def ensure_tunnels(self) -> None:
+        """Ensure the ssh tunnels are running."""
+        if not self.km.shutting_down:
             # calls provisioner.poll() which will restart SSH tunnels if these are dead
-            self.km.is_alive()
+            p = getattr(getattr(self.km, "provisioner", {}), "ensure_tunnels", None)
+            if p:
+                await p.poll()
 
     def log_connection_info(self) -> None:
         """Log the connection info for the kernel."""
