@@ -401,14 +401,14 @@ def add_kernel(args: argparse.Namespace) -> None:
         # For now don't exit. People can still fix it manually.
     kernel_spec = {
         # We populate the argv to allow external apps to launch the kernel "directly".
-        # To ensure the provisioner is used we launch a KernelApp instance locally.
+        # To ensure the provisioner is used we launch a SSHKernelApp instance locally.
         "argv": [
             # We make `python` the first argv because some external apps like, Jupyter
             # in VS Code, perform extra checks and they expect something like
             # `python -m ipykernel_launcher -f {connection_file}`. So we emulate that.
             str(sys.executable),  # should be absolute path
             str(fp_sk.absolute()),
-            f"--KernelApp.kernel_name={kernel_name}",
+            f"--SSHKernelApp.kernel_name={kernel_name}",
             # The SSHKernelProvisioner is aware of this and will use it if provided.
             "--KernelManager.connection_file='{connection_file}'",
         ],
