@@ -7,11 +7,11 @@ import uuid
 from signal import SIGCHLD, SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1
 from typing import Any, Sequence, Union
 
-from jupyter_client._version import __version__
+from jupyter_client import __version__  # type: ignore
 from jupyter_client.kernelspec import NATIVE_KERNEL_NAME, KernelSpecManager
 from jupyter_client.manager import KernelManager
 from jupyter_core.application import JupyterApp, base_flags
-from tornado.ioloop import IOLoop
+from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.iostream import StreamClosedError
 from traitlets import Bool, Unicode
 
@@ -49,6 +49,11 @@ class SSHKernelApp(JupyterApp):
         self.km = KernelManager(kernel_name=self.kernel_name, config=self.config)
 
         self.loop = IOLoop.current()
+
+        # Setup periodic callback to ensure tunnels every 5000 milliseconds = 5 seconds
+        # If the callback runs for longer than callback_time milliseconds,
+        # subsequent invocations will be skipped to get back on schedule.
+        self.periodic_poll = PeriodicCallback(self.poll, 5000)
 
         # Setup stdin handler to detect Ctrl+D (EOF) in an interactive terminal
         if self.capture_stdin and sys.stdin.isatty():
@@ -149,9 +154,7 @@ class SSHKernelApp(JupyterApp):
             msg = "Shutting down on Ctrl+D"
         self.log.info(msg)
         self.km.shutdown_kernel()
-        # self.km.kc.stop_channels()
-        # del self.km.kc
-        # del self.km
+        self.periodic_poll.stop()
         self.loop.stop()
 
     def leave(self, signo: int) -> None:
@@ -184,12 +187,12 @@ class SSHKernelApp(JupyterApp):
         self.log.info(msg)
         self.km.restart_kernel()
 
-    async def ensure_tunnels(self) -> None:
+    async def poll(self) -> None:
         """Ensure the ssh tunnels are running."""
         if not self.km.shutting_down:
-            # calls provisioner.poll() which will restart SSH tunnels if these are dead
-            p = getattr(getattr(self.km, "provisioner", {}), "ensure_tunnels", None)
+            p = getattr(self.km, "provisioner", None)
             if p:
+                # restart SSH tunnels (if not shutting down)
                 await p.poll()
 
     def log_connection_info(self) -> None:
@@ -205,8 +208,12 @@ class SSHKernelApp(JupyterApp):
             self.km.start_kernel()
             self.setup_signals()
             self.log_connection_info()
+            # Start the tunnel checker
+            self.periodic_poll.start()
             self.loop.start()
         finally:
+            if hasattr(self, "periodic_poll"):
+                self.periodic_poll.stop()
             self.km.cleanup_resources()
 
 

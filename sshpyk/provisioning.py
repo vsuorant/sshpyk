@@ -1126,7 +1126,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         return None if is_alive else 1
 
     async def poll(self) -> Optional[int]:
-        self.ld("poll() --------------------------------------------------------------")
         async with self._poll_lock:  # type: ignore
             res = await self._poll()
         return res
