@@ -1094,7 +1094,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             return None  # assume all good
 
         if not self.parent.shutting_down:  # type: ignore
-            # Check if tunnels process is still running, if not reopen it.
             await self.ensure_tunnels()
 
         # ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

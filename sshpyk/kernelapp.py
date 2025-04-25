@@ -13,7 +13,7 @@ from jupyter_client.manager import KernelManager
 from jupyter_core.application import JupyterApp, base_flags
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.iostream import StreamClosedError
-from traitlets import Bool, Unicode
+from traitlets import Bool, Integer, Unicode
 
 
 class SSHKernelApp(JupyterApp):
@@ -35,8 +35,14 @@ class SSHKernelApp(JupyterApp):
     capture_stdin = Bool(
         True,
         config=True,
-        help="Enable handling of Ctrl+D/A to terminate/restart. This has "
-        "no effect in a non-interactive terminal.",
+        help="Enable handling of Ctrl+D to interrupt/shutdown/restart/leave."
+        "This has no effect in a non-interactive terminal.",
+    )
+
+    poll_interval = Integer(
+        5000,
+        config=True,
+        help="Interval in milliseconds for polling to ensure SSH tunnels are running",
     )
 
     def initialize(self, argv: Union[str, Sequence[str], None] = None) -> None:
@@ -50,10 +56,11 @@ class SSHKernelApp(JupyterApp):
 
         self.loop = IOLoop.current()
 
-        # Setup periodic callback to ensure tunnels every 5000 milliseconds = 5 seconds
+        # Setup periodic callback to ensure tunnels are running even if internet
+        # connection is lost.
         # If the callback runs for longer than callback_time milliseconds,
         # subsequent invocations will be skipped to get back on schedule.
-        self.periodic_poll = PeriodicCallback(self.poll, 5000)
+        self.periodic_poll = PeriodicCallback(self.poll, self.poll_interval)
 
         # Setup stdin handler to detect Ctrl+D (EOF) in an interactive terminal
         if self.capture_stdin and sys.stdin.isatty():
