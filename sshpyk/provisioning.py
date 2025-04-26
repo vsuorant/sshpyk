@@ -18,6 +18,7 @@ from jupyter_client.session import new_id_bytes
 from jupyter_core.paths import jupyter_runtime_dir, secure_write
 from traitlets import Bool, Integer, Unicode
 
+from .kernelapp import EXISTING, PERSISTENT, PERSISTENT_FILE
 from .utils import (
     LAUNCH_TIMEOUT,
     RGX_UNAME_PREFIX,
@@ -114,17 +115,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     for kernel communication, and manages the lifecycle of the remote kernel.
     """
 
-    aliases = {
-        "persistent": "SSHKernelProvisioner.persistent",
-        "persistent-file": "SSHKernelProvisioner.persistent_file",
-    }
-
-    flags = {
-        # To not have to pass `--existing=True`, but just `--existing`
-        "existing": ({"SSHKernelProvisioner": {"existing": True}}, "TODO"),
-        "persistent": ({"SSHKernelProvisioner": {"persistent": True}}, "TODO"),
-    }
-
     ssh_host_alias = SshHost(
         config=True,
         help="Remote host alias to connect to. "
@@ -186,32 +176,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         allow_none=False,
         default_value="~/.sshpyk",
     )
-    # TODO fix docstrings
-    existing = UnicodePath(
-        config=True,
-        help="Path to a provisioner info file previously saved using, e.g., "
-        "`sshpyk-kernel --persistent ...` to connect to an existing sshpyk remote "
-        "kernel.",
-        default_value=None,
-        allow_none=True,
-    )
-    persistent = Bool(
-        config=True,
-        help="If True, the remote kernel will be left running on shutdown so that you "
-        "can reconnect to it later using, e.g., `sshpyk-kernel --existing ...`. "
-        "If `--persistent-file` is provided, this option is forced to True.",
-        default_value=False,
-    )
-    persistent_file = UnicodePath(
-        config=True,
-        help="Path to a provisioner info file previously saved using, e.g., "
-        "`sshpyk-kernel --persistent ...` or "
-        "`sshpyk remote --persistent-file ...` to connect to an existing sshpyk remote "
-        "kernel. If not provided, and `persistent` is True, the file will be saved in"
-        "Jupyter's `runtime` directory.",
-        default_value=None,
-        allow_none=True,
-    )
+    existing = Unicode(**EXISTING)  # type: ignore
+    persistent = Bool(**PERSISTENT)  # type: ignore
+    persistent_file = Unicode(**PERSISTENT_FILE)  # type: ignore
 
     restart_requested = False
     log_prefix = ""
@@ -365,12 +332,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         """
         Extract the remote process PID, connection file path, etc..
 
-        When executing the remote `sshpyk-kernel --SSHKernelApp.kernel_name=...` it
-        prints to stderr:
+        When executing the remote `sshpyk-kernel --kernel ...` it prints to stderr:
         ```
-        [SSHKernelApp] Starting kernel 'python3'
-        [SSHKernelApp] Connection file: /some/path/to/the/connection_file.json
-        [SSHKernelApp] To connect a client: --existing connection_file.json
+        [SSHKernelApp] [SSHPYK123] Connection file: /path/to/the/connection_file.json
+        [SSHKernelApp] [SSHPYK123] To connect a client: --existing connection_file.json
         ```
         """
         self.rem_ready = False  # reset
@@ -653,7 +618,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             with open(fp) as f:
                 info = json.load(f)
             self.ld(f"Persistent info {info = }")
-            await self.load_provisioner_info(info)
+            self.load_persistent_info(info)
         else:
             await self.launch_remote_kernel()
 
@@ -1026,7 +991,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     def load_persistent_info(self, persistent_info: Dict) -> None:
         """sync version of load_provisioner_info"""
         for k, v in persistent_info.items():
-            setattr(self, k, v)
+            if k == "rem_proc_cmds":
+                # Fix json serializing of int keys to strings
+                self.rem_proc_cmds = {int(k): v for k, v in v.items()}
+            else:
+                setattr(self, k, v)
         self.li(f"Persistent info loaded {persistent_info = }")
 
     async def load_provisioner_info(self, provisioner_info: Dict) -> None:
@@ -1051,8 +1020,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         kernel_name = self.parent.kernel_name  # type: ignore
         self.li(
             f"To (re)connect to this remote kernel later launch a provisioner: "
-            f"`sshpyk-kernel --SSHKernelApp.kernel_name={kernel_name} "
-            f"--SSHProvisioner.existing={fp.name}`"
+            f"`sshpyk-kernel --kernel {kernel_name} --existing {fp.name}`"
         )
 
     def get_shutdown_wait_time(self, recommended: Optional[float] = None):

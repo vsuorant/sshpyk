@@ -16,36 +16,60 @@ from jupyter_core.application import JupyterApp, base_flags
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.iostream import StreamClosedError
 from traitlets import Bool, Integer, Unicode
+from traitlets.config.loader import Config
 
-HELP_LEAVE = """
+LEAVE_HELP = """
 Launch remote kernel, leave it running, and exit this SSHKernelApp.
 When set to True, it provides a way to skip having to interact with the
 SSHKernelApp using keyboard input or signals.
 """
+
+EXISTING = dict(
+    config=True,
+    help="Filename or absolute path to a provisioner info file previously saved "
+    "using, e.g., `sshpyk-kernel --persistent ...` to connect to an existing "
+    "sshpyk remote kernel.",
+)
+PERSISTENT_HELP = """
+If True, the remote kernel will be left running on shutdown so that you
+can reconnect to it later using, e.g., `sshpyk-kernel --existing ...`.
+If `--persistent-file` is provided, this option is forced to True.
+"""
+PERSISTENT = dict(
+    config=True,
+    help=PERSISTENT_HELP,
+    default_value=False,
+)
+PERSISTENT_FILE = dict(
+    config=True,
+    help="Path to a provisioner info file previously saved using "
+    "`sshpyk-kernel --persistent ...` or "
+    "`sshpyk-kernel --persistent-file ...`. Allows to connect to a running sshpyk "
+    "remote kernel. If not provided, and `persistent` is True, the file "
+    "will be saved in Jupyter's `runtime` directory.",
+)
 
 
 class SSHKernelApp(JupyterApp):
     """Launch a kernel by its local name."""
 
     version = __version__
-    description = """
-    Launch a kernel by its local name. You can pass extra arguments to the
-    SSHProvisioner, e.g., `--SSHProvisioner.persistent=True`,
-    `--SSHProvisioner.persistent_file=/path/to/sshpyk_kernel.json` or
-    `--SSHProvisioner.existing=/path/to/sshpyk_kernel.json`. Please see the provisioner
-    source code for configurable options. Due to technical limitations these options
-    will not be displayed when running `sshpyk-kernel --help-all`.
-    """
+    description = """Launch a kernel by its local name."""
 
     classes = [KernelManager, KernelSpecManager]
+
     aliases = {
-        "kernel": "SSHKernelApp.kernel_name",
-        "leave": "SSHKernelApp.leave",
+        ("kernel", "k"): "SSHKernelApp.kernel_name",
+        ("existing", "e"): "SSHKernelApp.existing",
+        ("persistent_file", "f"): "SSHKernelApp.persistent_file",
+        ("poll-interval", "i"): "SSHKernelApp.poll_interval",
     }
+
     flags = {
-        "debug": base_flags["debug"],
-        # To not have to pass `--leave=True`, but just `--leave`
-        "leave": ({"SSHKernelApp": {"leave": True}}, HELP_LEAVE),
+        ("debug", "d"): base_flags["debug"],
+        # To not have to pass `--leave=True`, but just `--leave`/`-l`
+        ("leave", "l"): ({"SSHKernelApp": {"leave": True}}, LEAVE_HELP),
+        ("persistent", "p"): ({"SSHKernelApp": {"persistent": True}}, PERSISTENT_HELP),
     }
 
     kernel_name = Unicode(
@@ -62,13 +86,16 @@ class SSHKernelApp(JupyterApp):
     poll_interval = Integer(
         5000,
         config=True,
-        help="Interval in milliseconds for polling to ensure SSH tunnels are running",
+        help="Interval in milliseconds for polling to ensure SSH tunnels are running.",
     )
     leave = Bool(
         False,
         config=True,
-        help=HELP_LEAVE,
+        help=LEAVE_HELP,
     )
+    existing = Unicode(**EXISTING)  # type: ignore
+    persistent = Bool(**PERSISTENT)  # type: ignore
+    persistent_file = Unicode(**PERSISTENT_FILE)  # type: ignore
 
     def initialize(self, argv: Union[str, Sequence[str], None] = None) -> None:
         """Initialize the application."""
@@ -77,6 +104,21 @@ class SSHKernelApp(JupyterApp):
         cf_basename = f"kernel-{uuid.uuid4()}.json"
         fp = os.path.join(self.runtime_dir, cf_basename)
         self.config.setdefault("KernelManager", {}).setdefault("connection_file", fp)
+
+        # Pass config options to provisioner
+        p_name = "SSHKernelProvisioner"
+        if p_name not in self.config:
+            self.config[p_name] = Config()
+        pc = self.config[p_name]
+        for k in ("existing", "persistent", "persistent_file"):
+            if getattr(self, k):
+                v = getattr(self, k)
+                if k in pc:
+                    msg = f"Overriding --{p_name}.{k}={pc[k]} with --{k}={v}"
+                    self.log.warning(msg)
+                pc[k] = v
+        self.log.debug(f"{self.config = }")
+
         self.km = KernelManager(kernel_name=self.kernel_name, config=self.config)
 
         self.loop = IOLoop.current()
@@ -196,7 +238,7 @@ class SSHKernelApp(JupyterApp):
             fp = getattr(p, "persistent_file", None)
             if fp:
                 Path(fp).unlink()
-                self.log.info(f"Persistent info file {fp} removed")
+                self.log.info(f"Cleaned up persistent info file {fp}")
         self.loop.stop()
 
     def leave_app(self, signo: int) -> None:
@@ -263,9 +305,9 @@ class SSHKernelApp(JupyterApp):
                 p.write_persistent_info()
             # Start the tunnel checker
             self.periodic_poll.start()
-            self.loop.start()
             if self.leave:
                 self.leave_app(0)
+            self.loop.start()
         finally:
             if hasattr(self, "periodic_poll"):
                 self.periodic_poll.stop()
