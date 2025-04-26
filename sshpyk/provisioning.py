@@ -1,6 +1,7 @@
 """SSH Kernel Provisioner implementation for Jupyter Client."""
 
 import asyncio
+import hashlib
 import json
 import re
 import subprocess
@@ -23,14 +24,14 @@ from .utils import (
     verify_local_ssh,
 )
 
-EXEC_PREFIX = "JUPYTER_KERNEL_EXEC"
+EXEC_PREFIX = "SSHPYK_KERNELAPP_EXEC"
 RGX_EXEC_PREFIX = re.compile(rf"{EXEC_PREFIX}=(\d+)")
 PS_PREFIX = "===PS_OUTPUT_START==="
 RGX_PS_PREFIX = re.compile(rf"{PS_PREFIX}=(.+)")
 CONN_INFO_PREFIX = "CONNECTION_INFO_JSON"
 RGX_CONN_INFO_PREFIX = re.compile(rf"{CONN_INFO_PREFIX}=(.+)")
-RGX_CONN_FP = re.compile(r"\[KernelApp\].*file: (.*\.json)")
-RGX_CONN_CLIENT = re.compile(r"\[KernelApp\].*client: (.*\.json)")
+RGX_CONN_FP = re.compile(r"\[SSHKernelApp\].*file: (.*\.json)")
+RGX_CONN_CLIENT = re.compile(r"\[SSHKernelApp\].*client: (.*\.json)")
 PID_PREFIX_KERNEL_APP = "KERNEL_APP_PID"
 RGX_PID_KERNEL_APP = re.compile(rf"{PID_PREFIX_KERNEL_APP}=(\d+)")
 PID_PREFIX_KERNEL = "KERNEL_PID"
@@ -40,6 +41,9 @@ REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
 RGX_KERNEL_NAME = re.compile(r"^[a-z0-9._-]+$", re.IGNORECASE)
 RGX_SSH_HOST_ALIAS = re.compile(r"^[a-z0-9_-]+$", re.IGNORECASE)
 
+KERNELAPP_PY = (Path(__file__).parent / "kernelapp.py").read_bytes()
+KA_VERSION = hashlib.sha256(KERNELAPP_PY).hexdigest()[:8]  # 4 bytes = 8 hex chars
+KERNELAPP_PY = KERNELAPP_PY.decode()
 
 PNAMES = ("shell_port", "iopub_port", "stdin_port", "hb_port", "control_port")
 
@@ -159,6 +163,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         "if you are running `sshpyk-kernel` directly and know what you are doing.",
         default_value=True,
     )
+    remote_script_dir = UnicodePath(
+        config=True,
+        help="Path to a remote directory in which a script required to launch the "
+        "remote kernel will be written. If the directory does not exist, it will be "
+        "created.",
+        allow_none=False,
+        default_value="~/.sshpyk",
+    )
 
     restart_requested = False
     log_prefix = ""
@@ -176,7 +188,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     ports_cached = False
 
-    rem_jupyter = None
     rem_exec_ok = None
     rem_sys_name = None
 
@@ -184,7 +195,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     rem_ready = False
     rem_conn_info = None
 
-    rem_pid_ka = None  # to be able to kill the remote KernelApp process
+    rem_pid_ka = None  # to be able to kill the remote SSHKernelApp process
     rem_pid_k = None  # to be able to monitor and kill the remote kernel process
 
     rem_proc_cmds = None
@@ -248,7 +259,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         match = RGX_EXEC_PREFIX.search(line)
         if match:
             self.rem_exec_ok = match.group(1) == "0"
-            self.ld(f"Remote {self.rem_jupyter!r} status: {self.rem_exec_ok}")
+            self.ld(f"Remote SSHKernelApp status: {self.rem_exec_ok}")
             return True
         return False
 
@@ -256,7 +267,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         match = RGX_PID_KERNEL_APP.search(line)
         if match:
             self.rem_pid_ka = int(match.group(1))
-            self.li(f"Remote KernelApp launched, RPID={self.rem_pid_ka}")
+            self.li(f"Remote SSHKernelApp launched, RPID={self.rem_pid_ka}")
             return True
         return False
 
@@ -283,23 +294,46 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             return True
         return False
 
+    async def extract_from_script_write(
+        self, process: subprocess.Popen, cmd: List[str]
+    ):
+        self.ld(f"Waiting for remote connection file path from {cmd = }")
+        self.rem_exec_ok = None  # reset
+        try:
+            future = self.extract_from_process_pipes(
+                process=process, line_handlers=[self.extract_rem_exec_ok_handler]
+            )
+            await asyncio.wait_for(future, timeout=self.launch_timeout)
+        except TimeoutError as e:
+            msg = f"Timed out waiting {self.launch_timeout}s to write the remote script"
+            self.le(msg)
+            raise RuntimeError(msg) from e
+
+        if not self.rem_exec_ok:
+            msg = (
+                "Remote SSHKernelApp script write failed. "
+                "Check your SSH connection and permissions on remote."
+            )
+            self.le(msg)
+            raise RuntimeError(msg)
+        self.li("Remote SSHKernelApp script written")
+
     async def extract_from_kernel_launch(
         self, process: subprocess.Popen, cmd: List[str]
     ):
         """
         Extract the remote process PID and connection file path.
 
-        When executing the `jupyter-kernel --KernelApp.kernel_name=...` it prints
+        When executing the `sshpyk-kernel --SSHKernelApp.kernel_name=...` it prints
         to stderr:
         ```
-        [KernelApp] Starting kernel 'python3'
-        [KernelApp] Connection file: /some/path/to/the/connection_file.json
-        [KernelApp] To connect a client: --existing connection_file.json
+        [SSHKernelApp] Starting kernel 'python3'
+        [SSHKernelApp] Connection file: /some/path/to/the/connection_file.json
+        [SSHKernelApp] To connect a client: --existing connection_file.json
         ```
 
         TODO: Relying on the logs on the remote process is potentially fragile. For
-        robustness, we should execute a script on remote and print the information in
-        a JSON that can be parsed.
+            robustness, we should log all the information in a JSON that can be parsed.
         """
         self.rem_ready = False  # reset
         self.ld(f"Waiting for remote connection file path from {cmd = }")
@@ -329,7 +363,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise RuntimeError(msg)
 
         if not self.rem_exec_ok:
-            msg = f"Remote {self.rem_jupyter!r} not found/readable/executable."
+            msg = "Remote SSHKernelApp not found/readable/executable."
             self.le(msg)
             raise RuntimeError(msg)
 
@@ -497,9 +531,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if not all(k_conf):
             raise ValueError("Bad kernel configuration.")
 
-        p = Path(self.remote_python_prefix)
-        self.rem_jupyter = str(p / "bin" / "jupyter-kernel")
-
         if self.popen_procs is None:
             self.popen_procs: Dict[int, subprocess.Popen] = {}  # Dict[pid, Popen]
         if self.rem_proc_cmds is None:
@@ -511,22 +542,58 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if self.parent is None:
             raise RuntimeError("Parent KernelManager not set")
 
+    def make_remote_script_fp(self):
+        """Make the remote script file path."""
+        return f"{self.remote_script_dir}/sshpyk-kernel-v{KA_VERSION}"
+
+    async def write_remote_script(self):
+        """Write the remote script on the remote machine."""
+        remote_script_fp = self.make_remote_script_fp()
+        script = f"#!{self.remote_python_prefix}/bin/python\n{KERNELAPP_PY}"
+        cmd = [
+            f"mkdir -p {self.remote_script_dir}",
+            f"cat > {remote_script_fp} < /dev/stdin",
+            f"chmod 755 {remote_script_fp}",
+            f"echo {EXEC_PREFIX}=$?",
+        ]
+        self.ld(f"Remote command {cmd = }")
+        cmd = "; ".join(cmd)
+        cmd = [self.ssh, "-q", self.ssh_host_alias, cmd]
+        self.ld(f"Local command {cmd = }")
+        process = subprocess.Popen(  # noqa: S603
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE,
+            start_new_session=self.independent_local_processes,
+            bufsize=1,
+            universal_newlines=True,
+        )
+        self.popen_procs[process.pid] = process
+        process.stdin.write(script)
+        process.stdin.flush()
+        process.stdin.close()
+        await self.extract_from_script_write(process=process, cmd=cmd)
+        await self.terminate_popen(process)
+
     async def pre_launch(self, **kwargs: Any) -> Dict[str, Any]:
         """
         Prepare for kernel launch.
 
         NB do to the connection file being overwritten on the remote machine by the
-        jupyter-kernel command, this function ACTUALLY launches the remote kernel
+        sshpyk-kernel command, this function ACTUALLY launches the remote kernel
         and later in launch_kernel() it sets up the SSH tunnels.
         """
         if not self.restart_requested:
             self.pre_launch_init()
         await self._launch_lock.acquire()  # type: ignore
 
-        fpj = self.rem_jupyter
+        if not self.restart_requested:
+            await self.write_remote_script()
+        remote_script_fp = self.make_remote_script_fp()
         rem_args = [
-            fpj,
-            f"--KernelApp.kernel_name={self.remote_kernel_name}",
+            remote_script_fp,
+            f"--SSHKernelApp.kernel_name={self.remote_kernel_name}",
             # Generating the configuration file on the remote upfront did not work
             # because the jupyter command on the remote seemed to
             # override the connection ports and the key in the connection file.
@@ -550,11 +617,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             rem_args.append(f"--KernelManager.connection_file='{self.rem_conn_fp}'")
 
         # Simply specifying the connection file does not work because the
-        # remote KernelApp overrides the contents of the connection file.
+        # remote SSHKernelApp overrides the contents of the connection file.
         # Using /dev/stdin does the trick of forcing the remote kernel to use the
         # provided key (which we preserve on restarts).
         # ! if we input the session key directly here in plain text, then on
-        # ! the remote machine you can run e.g. `ps aux | grep jupyter-kernel`
+        # ! the remote machine you can run e.g. `ps aux | grep sshpyk-kernel`
         # ! and see the key in plain text in the command. We therefore
         # ! communicate it securely using the stdin pipe of the ssh process below.
         rem_args.append("--ConnectionFileMixin.Session.keyfile=/dev/stdin")
@@ -576,12 +643,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # Print `uname` of remote system
             f"echo -n '{UNAME_PREFIX}='",
             "uname -a",
-            f"FPJ={fpj}",
+            f"FPJ={remote_script_fp}",
             'test -e "$FPJ" && test -r "$FPJ" && test -x "$FPJ"',
             f"echo {EXEC_PREFIX}=$?",
-            # Print the PID of the remote KernelApp process
+            # Print the PID of the remote SSHKernelApp process
             f"echo {PID_PREFIX_KERNEL_APP}=$$",
-            # Launch the KernelApp
+            # Launch the SSHKernelApp
             f"exec nohup {cmd}",
         ]
         cmd = "; ".join(cmd_parts)
@@ -625,7 +692,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         process.stdin.flush()
         # Close the input pipe, see launch_kernel in jupyter_client
         # When we close the input pipe, the remote process will receive EOF and the
-        # KernelApp will start the kernel.
+        # SSHKernelApp will start the kernel.
         process.stdin.close()
 
         await self.extract_from_kernel_launch(process=process, cmd=cmd)
@@ -660,7 +727,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 f"RPIDs: {self.rem_pid_ka}, {self.rem_pid_k}"
             )
 
-        # It should not happen but if the only the KernelApp is dead while the kernel
+        # It should not happen but if the only the SSHKernelApp is dead while the kernel
         # process is still running, we proceed.
         if self.rem_pid_k not in proc_info:
             raise RuntimeError(
@@ -798,7 +865,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # be generated by some other piece of software with a strange kernel name.
         # km.session.kernel_name = rci.get("kernel_name", "")
 
-        # TODO: set these when starting the remote KernelApp instead
+        # TODO: set these when starting the remote SSHKernelApp instead
         km.transport = rci["transport"]
         km.session.signature_scheme = rci["signature_scheme"]
 
@@ -836,7 +903,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         because of the shutdown message sent by the KernelManager on the kernel's
         control port.
 
-        ! Mind that at this point the jupyter-kernel process (KernelApp) on the remote
+        ! Mind that at this point the sshpyk-kernel process (SSHKernelApp) on the remote
         ! machine is still alive.
 
         After this, the KernelManager polls the provisioner's `self.poll()` method to
@@ -923,7 +990,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 await asyncio.wait_for(self.wait_remote([self.rem_pid_ka]), timeout)
             except asyncio.TimeoutError:
                 self.lw(
-                    f"Timeout for remote KernelApp to terminate, "
+                    f"Timeout for remote SSHKernelApp to terminate, "
                     f"RPID={self.rem_pid_ka}. Sending SIGKILL."
                 )
                 await self.send_sigterm_to_remote(self.rem_pid_ka, SIGKILL)
@@ -933,13 +1000,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 await asyncio.wait_for(self.wait_remote([self.rem_pid_ka]), timeout)
             except asyncio.TimeoutError:
                 self.lw(
-                    f"Timeout for remote KernelApp to terminate after SIGKILL, "
+                    f"Timeout for remote SSHKernelApp to terminate after SIGKILL, "
                     f"RPID={self.rem_pid_ka}. Ignoring."
                 )
         self.li(f"Cleanup done ({restart = })")
 
         if self.rem_pid_ka:
-            self.lw(f"Remote KernelApp RPID={self.rem_pid_ka} was likely not killed")
+            self.lw(f"Remote SSHKernelApp RPID={self.rem_pid_ka} was likely not killed")
             self.rem_pid_ka = None
 
         if self.rem_pid_k:
@@ -1184,7 +1251,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # No need for timeout, KernelManager already has it
 
         # Since we are calling the remote machine anyway, fetch the status of the remote
-        # KernelApp process as well, if it is not running we won't have to kill it.
+        # SSHKernelApp process as well, if it is not running we won't have to kill it.
         pids_extra = [self.rem_pid_ka] if self.rem_pid_ka else None
         await self.wait_remote([self.rem_pid_k], pids_extra=pids_extra)
         self.ld("Remote kernel shutdown complete")
@@ -1300,7 +1367,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # # which will wait for the remote process to terminate.
 
     async def terminate(self, restart: bool = False) -> None:
-        """Terminates the remote kernel and KernelApp."""
+        """Terminates the remote kernel and SSHKernelApp."""
         # # This method is called by the KernelManager after a graceful shutdown of the
         # # kernel did not complete within the timeout.
         # ! Due to what seems to be a bug in jupyter_client <= 8.6.3, `restart` is

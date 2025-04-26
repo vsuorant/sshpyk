@@ -42,7 +42,7 @@ K_CMDS = "Command (simplified):"
 K_LANG = "Language:"
 K_SSH = "SSH Host Alias:"
 K_SSH_PATH = "SSH Path:"
-K_RPFX = "Remote Python Prefix:"
+K_EXE = "Remote Python:"
 K_RKER = "Remote Kernel Name:"
 K_RLANG = "Remote Language:"
 K_TIME = "Launch Timeout:"
@@ -63,7 +63,7 @@ ALL_KEYS = [
     K_SSH,
     K_SSH_PATH,
     K_RUNAME,
-    K_RPFX,
+    K_EXE,
     K_RKER,
     K_RLANG,
     K_TIME,
@@ -248,7 +248,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
             exec_ok, _ = verify_rem_executable(
                 ssh_bin,
                 kernel["host"],
-                str(Path(kernel["remote_python_prefix"]) / "bin" / "jupyter-kernel"),
+                str(Path(kernel["remote_python_prefix"]) / "bin" / "python"),
             )
             results["exec_ok"] = bool(exec_ok)
 
@@ -299,8 +299,8 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
     k_lines.append(f"{C}{K_DISP:<{K_LEN}}{N} {kernel['display_name']}")
     k_lines.append(f"{C}{K_RES:<{K_LEN}}{N} {kernel['resource_dir']}")
     ssh_command = (
-        f"ssh {kernel['host']} jupyter-kernel "
-        f"--KernelApp.kernel_name={kernel['remote_kernel_name']} ..."
+        f"ssh {kernel['host']} sshpyk-kernel "
+        f"--SSHKernelApp.kernel_name={kernel['remote_kernel_name']} ..."
     )
     k_lines.append(f"{C}{K_CMDS:<{K_LEN}}{N} {ssh_command}")
     k_lines.append(f"{C}{K_LANG:<{K_LEN}}{N} {kernel['language']}")
@@ -317,7 +317,7 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
     if check_res["interrupt_mode_remote"]:
         k_lines.append(f"{C}{K_RINT:<{K_LEN}}{N} {check_res['interrupt_mode_remote']}")
     c = format_check(check_res["exec_ok"])
-    k_lines.append(f"{C}{K_RPFX:<{K_LEN}}{N} {c} {kernel['remote_python_prefix']}")
+    k_lines.append(f"{C}{K_EXE:<{K_LEN}}{N} {c} {kernel['remote_python_prefix']}")
     c = format_check(check_res["kernel_ok"])
     k_lines.append(f"{C}{K_RKER:<{K_LEN}}{N} {c} {kernel['remote_kernel_name']}")
     k_lines.append(f"{C}{K_TIME:<{K_LEN}}{N} {kernel['launch_timeout']}")

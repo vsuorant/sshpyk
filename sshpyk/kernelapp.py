@@ -1,6 +1,7 @@
 """An application to launch a kernel by name in a local subprocess."""
 
 import os
+import re
 import signal
 import sys
 import uuid
@@ -8,7 +9,7 @@ from signal import SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1
 from typing import Any, Sequence, Union
 
 from jupyter_client import __version__  # type: ignore
-from jupyter_client.kernelspec import NATIVE_KERNEL_NAME, KernelSpecManager
+from jupyter_client.kernelspec import KernelSpecManager
 from jupyter_client.manager import KernelManager
 from jupyter_core.application import JupyterApp, base_flags
 from tornado.ioloop import IOLoop, PeriodicCallback
@@ -28,8 +29,8 @@ class SSHKernelApp(JupyterApp):
 
     kernel_name = Unicode(
         config=True,
-        default_value=NATIVE_KERNEL_NAME,
         help="The name of a kernel type to start",
+        allow_none=False,
     )
 
     capture_stdin = Bool(
@@ -76,9 +77,10 @@ class SSHKernelApp(JupyterApp):
             if not data:  # EOF detected
                 self.log.info("Received EOF (Ctrl+D)")
                 sys.stdout.write(
-                    "[Y/i/l/r/n] (Y = shutdown (default), i = interrupt, "
-                    "l = leave w/out kernel shutdown, r = restart, n = nothing)"
-                    "\nAction? "
+                    "Pick an action and press Enter: "
+                    "Y = shutdown (default), i = interrupt, "
+                    "l = leave w/out kernel shutdown, r = restart, n = nothing"
+                    "\nAction? [Y/i/l/r/n]: "
                 )
                 sys.stdout.flush()
 
@@ -156,12 +158,15 @@ class SSHKernelApp(JupyterApp):
 
     def shutdown(self, signo: int) -> None:
         """Shut down the application."""
+        self.periodic_poll.stop()
         msg = f"Shutting down on signal {signo}"
         if signo == 0:
             msg = "Shutting down on Ctrl+D"
-        self.log.info(msg)
+        elif signo == -1:
+            msg = None
+        if msg:
+            self.log.info(msg)
         self.km.shutdown_kernel()
-        self.periodic_poll.stop()
         self.loop.stop()
 
     def leave(self, signo: int) -> None:
@@ -176,14 +181,17 @@ class SSHKernelApp(JupyterApp):
             self.log.error("Kernel is not running anymore!")
             self.shutdown(signo)
         else:
-            # Make the provisioner forget about the remote kernel
-            p = self.km.provisioner
-            if p.rem_pid_k:
-                self.log.info(f"Remote kernel RPID={p.rem_pid_k} not killed")
-                p.rem_pid_k = None
-            if p.rem_pid_ka:
-                self.log.info(f"Remote KernelApp RPID={p.rem_pid_ka} not killed")
-                p.rem_pid_ka = None
+            # Make the SSHProvisioner forget about the remote kernel
+            p = getattr(self.km, "provisioner", None)
+            if p:
+                pid = getattr(p, "rem_pid_k", None)
+                if pid:
+                    self.log.info(f"Remote kernel RPID={pid} not killed")
+                    p.rem_pid_k = None
+                pid = getattr(p, "rem_pid_ka", None)
+                if pid:
+                    self.log.info(f"Remote SSHKernelApp RPID={pid} not killed")
+                    p.rem_pid_ka = None
             self.loop.stop()
 
     def restart(self, signo: int) -> None:
@@ -200,7 +208,10 @@ class SSHKernelApp(JupyterApp):
             p = getattr(self.km, "provisioner", None)
             if p:
                 # restart SSH tunnels (if not shutting down)
-                await p.poll()
+                ret = await p.poll()
+                if ret is not None:
+                    self.log.info(f"Kernel quit with exit code {ret}, shutting down.")
+                    self.shutdown(-1)
 
     def log_connection_info(self) -> None:
         """Log the connection info for the kernel."""
@@ -225,3 +236,8 @@ class SSHKernelApp(JupyterApp):
 
 
 main = SSHKernelApp.launch_instance
+
+# This is mainly to allow running the SSHKernelApp as a script on the remote machine
+if __name__ == "__main__":
+    sys.argv[0] = re.sub(r"(-script\.pyw|\.exe)?$", "", sys.argv[0])
+    sys.exit(main())
