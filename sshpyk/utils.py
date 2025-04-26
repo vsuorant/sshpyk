@@ -4,7 +4,9 @@ import re
 from pathlib import Path
 from shutil import which
 from subprocess import run
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Union
+
+from jupyter_client.connect import find_connection_file
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,8 @@ UNAME_PREFIX = "UNAME_INFO_RESULT"
 RGX_UNAME_PREFIX = re.compile(rf"{UNAME_PREFIX}=(.+)")
 GET_SPECS_PREFIX = "GET_SPECS_RESULT"
 RGX_GET_SPECS_PREFIX = re.compile(rf"{GET_SPECS_PREFIX}=(.+)")
+
+SSHPYK_PERSISTENT_FP_BASE = "sshpyk-kernel"
 
 
 def verify_local_ssh(
@@ -164,3 +168,18 @@ def fetch_remote_kernel_specs(
 
     log.info(f"{lp}Successfully fetched {len(specs)} kernel specs from {host_alias!r}")
     return specs
+
+
+def find_persistent_file(
+    filename: str = f"{SSHPYK_PERSISTENT_FP_BASE}-*.json",
+    path: Union[str, List[str], None] = None,
+    profile: Optional[str] = None,
+) -> str:
+    """
+    Find a persistent file by name or glob pattern.
+    The persistent file is a JSON file that contains the provisioner info.
+
+    This function is a wrapper around `jupyter_client.connect.find_connection_file`.
+    See the docstring of that function for details.
+    """
+    return find_connection_file(filename, path, profile)

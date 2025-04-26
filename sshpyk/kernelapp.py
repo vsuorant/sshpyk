@@ -5,6 +5,7 @@ import re
 import signal
 import sys
 import uuid
+from pathlib import Path
 from signal import SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1
 from typing import Any, Sequence, Union
 
@@ -16,34 +17,57 @@ from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.iostream import StreamClosedError
 from traitlets import Bool, Integer, Unicode
 
+HELP_LEAVE = """
+Launch remote kernel, leave it running, and exit this SSHKernelApp.
+When set to True, it provides a way to skip having to interact with the
+SSHKernelApp using keyboard input or signals.
+"""
+
 
 class SSHKernelApp(JupyterApp):
     """Launch a kernel by its local name."""
 
     version = __version__
-    description = "Launch a kernel by its local name."
+    description = """
+    Launch a kernel by its local name. You can pass extra arguments to the
+    SSHProvisioner, e.g., `--SSHProvisioner.persistent=True`,
+    `--SSHProvisioner.persistent_file=/path/to/sshpyk_kernel.json` or
+    `--SSHProvisioner.existing=/path/to/sshpyk_kernel.json`. Please see the provisioner
+    source code for configurable options. Due to technical limitations these options
+    will not be displayed when running `sshpyk-kernel --help-all`.
+    """
 
     classes = [KernelManager, KernelSpecManager]
-
-    flags = {"debug": base_flags["debug"]}
+    aliases = {
+        "kernel": "SSHKernelApp.kernel_name",
+        "leave": "SSHKernelApp.leave",
+    }
+    flags = {
+        "debug": base_flags["debug"],
+        # To not have to pass `--leave=True`, but just `--leave`
+        "leave": ({"SSHKernelApp": {"leave": True}}, HELP_LEAVE),
+    }
 
     kernel_name = Unicode(
         config=True,
         help="The name of a kernel type to start",
         allow_none=False,
     )
-
     capture_stdin = Bool(
         True,
         config=True,
         help="Enable handling of Ctrl+D to interrupt/shutdown/restart/leave."
         "This has no effect in a non-interactive terminal.",
     )
-
     poll_interval = Integer(
         5000,
         config=True,
         help="Interval in milliseconds for polling to ensure SSH tunnels are running",
+    )
+    leave = Bool(
+        False,
+        config=True,
+        help=HELP_LEAVE,
     )
 
     def initialize(self, argv: Union[str, Sequence[str], None] = None) -> None:
@@ -91,7 +115,7 @@ class SSHKernelApp(JupyterApp):
                 if response == "" or response == "y":
                     self.shutdown(0)
                 elif response == "l":
-                    self.leave(0)
+                    self.leave_app(0)
                 elif response == "r":
                     self.restart(0)
                 elif response == "i":
@@ -122,7 +146,7 @@ class SSHKernelApp(JupyterApp):
             elif signo == SIGUSR1:
                 self.loop.add_callback_from_signal(self.restart, signo)
             elif signo == SIGQUIT:
-                self.loop.add_callback_from_signal(self.leave, signo)
+                self.loop.add_callback_from_signal(self.leave_app, signo)
             elif signo == SIGTERM:
                 self.log.info(f"Shutting down on signal {signo}")
                 self.loop.add_callback_from_signal(self.shutdown, signo)
@@ -167,14 +191,22 @@ class SSHKernelApp(JupyterApp):
         if msg:
             self.log.info(msg)
         self.km.shutdown_kernel()
+        p = getattr(self.km, "provisioner", None)
+        if p:
+            fp = getattr(p, "persistent_file", None)
+            if fp:
+                Path(fp).unlink()
+                self.log.info(f"Persistent info file {fp} removed")
         self.loop.stop()
 
-    def leave(self, signo: int) -> None:
+    def leave_app(self, signo: int) -> None:
         """Leave the application without shutting down the kernel."""
         c = self.__class__.__name__
         msg = f"Leaving {c} on signal {signo}. Remote kernel will not be shutdown!"
         if signo == 0:
             msg = "Leaving on Ctrl+D. Remote kernel will not be shutdown!"
+        elif signo == -1:
+            msg = "Leaving after kernel launch. Remote kernel will not be shutdown!"
         self.log.info(msg)
         is_alive = self.km.is_alive()  # calls provisioner.poll()
         if not is_alive:
@@ -226,9 +258,14 @@ class SSHKernelApp(JupyterApp):
             self.km.start_kernel()
             self.setup_signals()
             self.log_connection_info()
+            p = getattr(self.km, "provisioner", None)
+            if p and getattr(p, "persistent", False):
+                p.write_persistent_info()
             # Start the tunnel checker
             self.periodic_poll.start()
             self.loop.start()
+            if self.leave:
+                self.leave_app(0)
         finally:
             if hasattr(self, "periodic_poll"):
                 self.periodic_poll.stop()

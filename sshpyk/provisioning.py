@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import subprocess
+import uuid
 from enum import Enum, unique
 from itertools import dropwhile
 from pathlib import Path
@@ -14,13 +15,16 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from jupyter_client.connect import KernelConnectionInfo, LocalPortCache
 from jupyter_client.provisioning.provisioner_base import KernelProvisionerBase
 from jupyter_client.session import new_id_bytes
+from jupyter_core.paths import jupyter_runtime_dir, secure_write
 from traitlets import Bool, Integer, Unicode
 
 from .utils import (
     LAUNCH_TIMEOUT,
     RGX_UNAME_PREFIX,
     SHUTDOWN_TIME,
+    SSHPYK_PERSISTENT_FP_BASE,
     UNAME_PREFIX,
+    find_persistent_file,
     verify_local_ssh,
 )
 
@@ -110,6 +114,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     for kernel communication, and manages the lifecycle of the remote kernel.
     """
 
+    aliases = {
+        "persistent": "SSHKernelProvisioner.persistent",
+        "persistent-file": "SSHKernelProvisioner.persistent_file",
+    }
+
+    flags = {
+        # To not have to pass `--existing=True`, but just `--existing`
+        "existing": ({"SSHKernelProvisioner": {"existing": True}}, "TODO"),
+        "persistent": ({"SSHKernelProvisioner": {"persistent": True}}, "TODO"),
+    }
+
     ssh_host_alias = SshHost(
         config=True,
         help="Remote host alias to connect to. "
@@ -170,6 +185,32 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         "created.",
         allow_none=False,
         default_value="~/.sshpyk",
+    )
+    # TODO fix docstrings
+    existing = UnicodePath(
+        config=True,
+        help="Path to a provisioner info file previously saved using, e.g., "
+        "`sshpyk-kernel --persistent ...` to connect to an existing sshpyk remote "
+        "kernel.",
+        default_value=None,
+        allow_none=True,
+    )
+    persistent = Bool(
+        config=True,
+        help="If True, the remote kernel will be left running on shutdown so that you "
+        "can reconnect to it later using, e.g., `sshpyk-kernel --existing ...`. "
+        "If `--persistent-file` is provided, this option is forced to True.",
+        default_value=False,
+    )
+    persistent_file = UnicodePath(
+        config=True,
+        help="Path to a provisioner info file previously saved using, e.g., "
+        "`sshpyk-kernel --persistent ...` or "
+        "`sshpyk remote --persistent-file ...` to connect to an existing sshpyk remote "
+        "kernel. If not provided, and `persistent` is True, the file will be saved in"
+        "Jupyter's `runtime` directory.",
+        default_value=None,
+        allow_none=True,
     )
 
     restart_requested = False
@@ -249,9 +290,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     def extract_rem_sys_info_handler(self, line: str):
         match = RGX_UNAME_PREFIX.search(line)
         if match:
-            self.uname = match.group(1)
-            self.li(f"Remote uname: {self.uname}")
-            self.rem_sys_name = self.uname.split(None, 1)[0]
+            uname = match.group(1)
+            self.li(f"Remote uname: {uname}")
+            self.rem_sys_name = uname.split(None, 1)[0]
             return True
         return False
 
@@ -322,18 +363,15 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self, process: subprocess.Popen, cmd: List[str]
     ):
         """
-        Extract the remote process PID and connection file path.
+        Extract the remote process PID, connection file path, etc..
 
-        When executing the `sshpyk-kernel --SSHKernelApp.kernel_name=...` it prints
-        to stderr:
+        When executing the remote `sshpyk-kernel --SSHKernelApp.kernel_name=...` it
+        prints to stderr:
         ```
         [SSHKernelApp] Starting kernel 'python3'
         [SSHKernelApp] Connection file: /some/path/to/the/connection_file.json
         [SSHKernelApp] To connect a client: --existing connection_file.json
         ```
-
-        TODO: Relying on the logs on the remote process is potentially fragile. For
-            robustness, we should log all the information in a JSON that can be parsed.
         """
         self.rem_ready = False  # reset
         self.ld(f"Waiting for remote connection file path from {cmd = }")
@@ -417,10 +455,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     continue
                 match = RGX_CONN_INFO_PREFIX.search(line)
                 if match:
-                    rci_raw = match.group(1)
-                    rci = json.loads(rci_raw)
-                    rci["key"] = rci["key"].encode()  # the rest of the code uses bytes
-                    self.rem_conn_info = rci
+                    self.rem_conn_info = json.loads(match.group(1))
                     self.ld(f"Connection info remote: {self.rem_conn_info}")
                 match = RGX_PID_KERNEL.search(line)
                 if match:
@@ -513,10 +548,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if cf.is_file():
             # loads transport, ip, ports, key and signature_scheme
             # in KernelManager/Session
-            km.load_connection_file(cf)
+            km.load_connection_file(cf)  # type: ignore
             self.cf_loaded = True
 
     def pre_launch_init(self):
+        """Initialize the provisioner on the first launch."""
+
+        # ! REMINDER: this method is NOT called on kernel restarts.
+
         # Initialize locks, these are used to avoid race conditions
         # between the different async methods that jupyter_client calls.
         # This was introduced mainly because JupyterLab would often try to restart the
@@ -536,11 +575,25 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if self.rem_proc_cmds is None:
             self.rem_proc_cmds: Dict[int, str] = {}  # Dict[pid, cmd]
 
+        self.persistent = bool(self.persistent_file) or self.persistent
+        if self.persistent and not self.persistent_file:
+            # Store the persistent file in the Jupyter runtime directory by default,
+            # it is already managed by jupyter in a secure way.
+            fp = Path(jupyter_runtime_dir())
+            fp = fp / f"{SSHPYK_PERSISTENT_FP_BASE}-{uuid.uuid4()}.json"
+            if fp.exists():
+                self.ld("Persistent file exists. It will be overwritten.")
+            self.persistent_file = str(fp)
+            self.ld(f"{self.persistent_file = }")
+        self.ld(f"{self.existing = }, {self.persistent = }, {self.persistent_file = }")
+
         # Auto-detect SSH executable if not specified, verify by calling it
         self.ssh = verify_local_ssh(self.ssh, self.log, "ssh", self.log_prefix)
 
         if self.parent is None:
             raise RuntimeError("Parent KernelManager not set")
+
+        # ! REMINDER: this method is NOT called on kernel restarts.
 
     def make_remote_script_fp(self):
         """Make the remote script file path."""
@@ -589,11 +642,95 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         await self._launch_lock.acquire()  # type: ignore
 
         if not self.restart_requested:
+            # loads local ip/ports/key/etc into KernelManager/Session
+            self.load_connection_file()
+
+        if self.existing:
+            fp = find_persistent_file(self.existing)
+            if not fp:
+                raise RuntimeError(f"Persistent info file {fp} not found")
+            self.li(f"Using existing persistent info file {fp}")
+            with open(fp) as f:
+                info = json.load(f)
+            self.ld(f"Persistent info {info = }")
+            await self.load_provisioner_info(info)
+        else:
+            await self.launch_remote_kernel()
+
+        # Keep it outside `launch_remote_kernel()` because these PIDs can be loaded
+        # from a persistent file.
+        if not self.rem_pid_ka or not self.rem_pid_k:
+            msg = f"Unexpected RPIDs: {self.rem_pid_ka = }, {self.rem_pid_k = }"
+            self.le(msg)
+            raise RuntimeError(msg)
+
+        for _ in range(5):  # Try a few times for robustness
+            pids = [self.rem_pid_ka, self.rem_pid_k]
+            success, proc_info = await self.fetch_remote_processes_info(pids)
+            if not success:
+                await asyncio.sleep(0.2)
+                continue
+            if not self.rem_pid_k or not self.rem_pid_ka:
+                self.le(
+                    "Remote processes not found on remote system unexpectedly. "
+                    f"RPIDs: {self.rem_pid_ka = }, {self.rem_pid_k = }"
+                )
+            break
+        else:
+            raise RuntimeError(
+                "Failed to fetch remote processes info. "
+                "Some processes might be still running on the remote system. "
+                f"RPIDs: {self.rem_pid_ka}, {self.rem_pid_k}"
+            )
+
+        # It should not happen but if only the SSHKernelApp is dead while the kernel
+        # process is still running, we proceed.
+        if self.rem_pid_k not in proc_info:
+            raise RuntimeError(
+                "Kernel process not found on remote system. "
+                "A related process might be still running on the remote system "
+                f"RPID={self.rem_pid_ka}, you might need to kill it manually."
+            )
+        elif self.rem_pid_ka not in proc_info:
+            msg = "SSHKernelApp process not found on remote system. Ignoring."
+            self.lw(msg)
+            if self.rem_pid_ka:
+                self.rem_pid_ka = None  # reset
+
+        if not self.existing:
+            self.rem_proc_cmds = {pid: info["cmd"] for pid, info in proc_info.items()}
+        else:
+            for pid in [self.rem_pid_ka, self.rem_pid_k]:
+                cmd_current = proc_info[pid]["cmd"]
+                cmd_persistent = self.rem_proc_cmds[pid]
+                if cmd_current != cmd_persistent:
+                    msg = (
+                        f"Expected remote PID={pid} to be running {cmd_persistent} "
+                        f"but got {cmd_current}. Aborting."
+                    )
+                    self.le(msg)
+                    raise RuntimeError(msg)
+
+        await self.ensure_tunnels()
+
+        _ = kwargs.pop("extra_arguments", [])  # because LocalProvisioner does it
+
+        # * In case of future bugs check if calling this is relevant for running our
+        # * local commands
+        # cmd = km.format_kernel_cmd(extra_arguments=extra_arguments)
+        # NB `cmd` arg is passed in bc it is expected inside the KernelManager
+        return await super().pre_launch(cmd=[], **kwargs)
+
+    async def launch_remote_kernel(self):
+        if not self.restart_requested:
             await self.write_remote_script()
         remote_script_fp = self.make_remote_script_fp()
+        sig_scheme = self.parent.session.signature_scheme  # type: ignore
         rem_args = [
             remote_script_fp,
             f"--SSHKernelApp.kernel_name={self.remote_kernel_name}",
+            f"--KernelManager.transport={self.parent.transport}",  # type: ignore
+            f"--ConnectionFileMixin.Session.signature_scheme={sig_scheme}",
             # Generating the configuration file on the remote upfront did not work
             # because the jupyter command on the remote seemed to
             # override the connection ports and the key in the connection file.
@@ -626,9 +763,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # ! communicate it securely using the stdin pipe of the ssh process below.
         rem_args.append("--ConnectionFileMixin.Session.keyfile=/dev/stdin")
 
-        if not self.restart_requested:
-            # loads ip/ports/key/etc into KernelManager/Session
-            self.load_connection_file()
         km = self.parent  # KernelManager
         if not km.session.key:
             self.lw("Session key not set. Generating a new one.")
@@ -702,50 +836,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         # Always fetch the remote connection info to forward to the correct ports
         await self.fetch_remote_connection_info()
-
-        if not self.rem_pid_ka or not self.rem_pid_k:
-            msg = f"Unexpected RPIDs: {self.rem_pid_ka = }, {self.rem_pid_k = }"
-            self.le(msg)
-            raise RuntimeError(msg)
-
-        for _ in range(5):  # Try a few times for robustness
-            pids = [self.rem_pid_ka, self.rem_pid_k]
-            success, proc_info = await self.fetch_remote_processes_info(pids)
-            if not success:
-                await asyncio.sleep(0.2)
-                continue
-            if not self.rem_pid_k or not self.rem_pid_ka:
-                self.le(
-                    "Remote processes not found on remote system unexpectedly. "
-                    f"RPIDs: {self.rem_pid_ka = }, {self.rem_pid_k = }"
-                )
-            break
-        else:
-            raise RuntimeError(
-                "Failed to fetch remote processes info. "
-                "Some processes might be still running on the remote system. "
-                f"RPIDs: {self.rem_pid_ka}, {self.rem_pid_k}"
-            )
-
-        # It should not happen but if the only the SSHKernelApp is dead while the kernel
-        # process is still running, we proceed.
-        if self.rem_pid_k not in proc_info:
-            raise RuntimeError(
-                "Kernel process not found on remote system. "
-                "A related process might be still running on the remote system "
-                f"RPID={self.rem_pid_ka}, you might need to kill it manually."
-            )
-        self.rem_proc_cmds = {pid: info["cmd"] for pid, info in proc_info.items()}
-
-        await self.ensure_tunnels()
-
-        _ = kwargs.pop("extra_arguments", [])  # bc LocalProvisioner does it
-
-        # NOTE: in case of future bugs check if calling this is relevant for running our
-        # local commands
-        # cmd = km.format_kernel_cmd(extra_arguments=extra_arguments)
-        # NB `cmd` arg is passed in bc it is expected inside the KernelManager
-        return await super().pre_launch(cmd=[], **kwargs)
 
     async def terminate_popen(self, process: subprocess.Popen) -> None:
         process.terminate()
@@ -865,17 +955,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # be generated by some other piece of software with a strange kernel name.
         # km.session.kernel_name = rci.get("kernel_name", "")
 
-        # TODO: set these when starting the remote SSHKernelApp instead
+        # Just in case the remote SSHKernelApp did not honor the transport and
+        # signature scheme specified in the command line.
         km.transport = rci["transport"]
         km.session.signature_scheme = rci["signature_scheme"]
-
-        key_prev, key_new = km.session.key, rci["key"]
+        key_prev, key_new = km.session.key, rci["key"].encode()
         if key_prev and key_prev != key_new:
             # Let it run if it works, some other error should be raised somewhere else
             # if this is a problem.
-            # raise RuntimeError(
-            #     f"Session key was not preserved ({key_prev=} vs {key_new=}"
-            # )
             self.lw(f"Session key was not preserved ({key_prev=} vs {key_new=}")
             km.session.key = key_new
 
@@ -919,23 +1006,54 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.restart_requested = restart
         self.li(f"shutdown_requested({restart = })")
 
+    def get_persistent_info(self):
+        """sync version of get_provisioner_info"""
+        return {
+            "kernel_id": self.kernel_id,
+            "rem_sys_name": self.rem_sys_name,
+            "rem_conn_info": self.rem_conn_info,  # we kept `key` as string
+            "rem_pid_k": self.rem_pid_k,
+            "rem_pid_ka": self.rem_pid_ka,
+            "rem_conn_fp": self.rem_conn_fp,
+            "rem_proc_cmds": self.rem_proc_cmds,
+        }
+
     async def get_provisioner_info(self) -> Dict:
-        """
-        Get information about this provisioner instance.
-        NB this method was never called during the development of this provisioner.
-        """
-        provisioner_info = await super().get_provisioner_info()
-        # ? Do we need to add anything here?
-        # provisioner_info.update({})
-        return provisioner_info
+        """Get information about this provisioner instance."""
+        # * This method was never called during the development of this provisioner.
+        return self.get_persistent_info()
+
+    def load_persistent_info(self, persistent_info: Dict) -> None:
+        """sync version of load_provisioner_info"""
+        for k, v in persistent_info.items():
+            setattr(self, k, v)
+        self.li(f"Persistent info loaded {persistent_info = }")
 
     async def load_provisioner_info(self, provisioner_info: Dict) -> None:
-        """
-        Load information about this provisioner instance.
-        NB this method was never called during the development of this provisioner.
-        """
-        await super().load_provisioner_info(provisioner_info)
-        # ? Do we need to add anything here?
+        """Load information about this provisioner instance."""
+        # * This method was never called during the development of this provisioner.
+        return self.load_persistent_info(provisioner_info)
+
+    def write_persistent_info(self):
+        """Write the provisioner info to a file."""
+        if not self.persistent_file or not self.persistent:
+            self.le(
+                f"Skipping persistent info write {self.persistent = }, "
+                f"{self.persistent_file = }"
+            )
+            return
+        persistent_info = self.get_persistent_info()
+        self.ld(f"Writing persistent info {persistent_info = }")
+        with secure_write(self.persistent_file, binary=False) as f:
+            json.dump(persistent_info, f, indent=2)
+        fp = Path(self.persistent_file)
+        self.li(f"Persistent file: {fp.absolute()}")
+        kernel_name = self.parent.kernel_name  # type: ignore
+        self.li(
+            f"To (re)connect to this remote kernel later launch a provisioner: "
+            f"`sshpyk-kernel --SSHKernelApp.kernel_name={kernel_name} "
+            f"--SSHProvisioner.existing={fp.name}`"
+        )
 
     def get_shutdown_wait_time(self, recommended: Optional[float] = None):
         # x2 because the KernelManager waits 1/2 this time after the shutdown request,
