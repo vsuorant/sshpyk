@@ -4,7 +4,7 @@ import os
 import signal
 import sys
 import uuid
-from signal import SIGCHLD, SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1
+from signal import SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1
 from typing import Any, Sequence, Union
 
 from jupyter_client import __version__  # type: ignore
@@ -121,7 +121,7 @@ class SSHKernelApp(JupyterApp):
                 self.loop.add_callback_from_signal(self.restart, signo)
             elif signo == SIGQUIT:
                 self.loop.add_callback_from_signal(self.leave, signo)
-            elif signo in (SIGTERM, SIGCHLD):
+            elif signo == SIGTERM:
                 self.log.info(f"Shutting down on signal {signo}")
                 self.loop.add_callback_from_signal(self.shutdown, signo)
             else:
