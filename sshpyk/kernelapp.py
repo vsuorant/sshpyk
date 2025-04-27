@@ -5,7 +5,6 @@ import re
 import signal
 import sys
 import uuid
-from pathlib import Path
 from signal import SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1
 from typing import Any, Sequence, Union
 
@@ -33,7 +32,7 @@ EXISTING = dict(
 PERSISTENT_HELP = """
 If True, the remote kernel will be left running on shutdown so that you
 can reconnect to it later using, e.g., `sshpyk-kernel --existing ...`.
-If `--persistent-file` is provided, this option is forced to True.
+If `--persistent-file` is provided, this option is overridden to True.
 """
 PERSISTENT = dict(
     config=True,
@@ -42,11 +41,10 @@ PERSISTENT = dict(
 )
 PERSISTENT_FILE = dict(
     config=True,
-    help="Path to a provisioner info file previously saved using "
-    "`sshpyk-kernel --persistent ...` or "
-    "`sshpyk-kernel --persistent-file ...`. Allows to connect to a running sshpyk "
-    "remote kernel. If not provided, and `persistent` is True, the file "
-    "will be saved in Jupyter's `runtime` directory.",
+    help="Path to the file where to save the persistence info. "
+    "If not provided, the file will be saved in Jupyter's `runtime` directory. "
+    "If not provided, but `--persistent` flag is passed, the file will be preserved. "
+    "If provided, the file will be preserved and `--persistent` is overridden to True.",
 )
 
 
@@ -180,7 +178,7 @@ class SSHKernelApp(JupyterApp):
         if os.name == "nt":
             return
 
-        self.log.info("Setting up signal handlers")
+        self.log.debug("Setting up signal handlers")
 
         def shutdown_handler(signo: int, frame: Any) -> None:
             if signo == SIGINT:
@@ -195,10 +193,14 @@ class SSHKernelApp(JupyterApp):
             else:
                 self.log.debug(f"Unexpected signal {signo}")
 
+        msg_shutdown = (
+            "to shutdown, remote kernel will not shutdown if `--persistent` or "
+            "`--persistent-file` have been passed"
+        )
         c = self.__class__.__name__
         for sig, msg in (
-            (SIGHUP, "to shutdown the kernel"),
-            (SIGTERM, "to shutdown the kernel"),
+            (SIGHUP, msg_shutdown),
+            (SIGTERM, msg_shutdown),
             (SIGINT, "or press Ctrl+C to interrupt the kernel"),
             (SIGUSR1, "to restart the kernel"),
             (
@@ -233,12 +235,6 @@ class SSHKernelApp(JupyterApp):
         if msg:
             self.log.info(msg)
         self.km.shutdown_kernel()
-        p = getattr(self.km, "provisioner", None)
-        if p:
-            fp = getattr(p, "persistent_file", None)
-            if fp:
-                Path(fp).unlink()
-                self.log.info(f"Cleaned up persistent info file {fp}")
         self.loop.stop()
 
     def leave_app(self, signo: int) -> None:
@@ -255,17 +251,14 @@ class SSHKernelApp(JupyterApp):
             self.log.error("Kernel is not running anymore!")
             self.shutdown(signo)
         else:
-            # Make the SSHProvisioner forget about the remote kernel
+            # Enforce persistent, this is mainly to allow preserving the kernel even
+            # if the user launched the SSHKernelApp without the `--persistent` flag.
             p = getattr(self.km, "provisioner", None)
-            if p:
-                pid = getattr(p, "rem_pid_k", None)
-                if pid:
-                    self.log.info(f"Remote kernel RPID={pid} not killed")
-                    p.rem_pid_k = None
-                pid = getattr(p, "rem_pid_ka", None)
-                if pid:
-                    self.log.info(f"Remote SSHKernelApp RPID={pid} not killed")
-                    p.rem_pid_ka = None
+            if p and hasattr(p, "persistent"):
+                # SSHKernelProvisioner checks this flag before deleting persistent_file
+                p.persistent = True
+            # allow provisioner to perform local cleanups (e.g. cancel ssh tunnels)
+            self.shutdown(signo)
             self.loop.stop()
 
     def restart(self, signo: int) -> None:
@@ -284,7 +277,7 @@ class SSHKernelApp(JupyterApp):
                 # restart SSH tunnels (if not shutting down)
                 ret = await p.poll()
                 if ret is not None:
-                    self.log.info(f"Kernel quit with exit code {ret}, shutting down.")
+                    self.log.info("Kernel quit, shutting down.")
                     self.shutdown(-1)
 
     def log_connection_info(self) -> None:
@@ -300,13 +293,10 @@ class SSHKernelApp(JupyterApp):
             self.km.start_kernel()
             self.setup_signals()
             self.log_connection_info()
-            p = getattr(self.km, "provisioner", None)
-            if p and getattr(p, "persistent", False):
-                p.write_persistent_info()
             # Start the tunnel checker
             self.periodic_poll.start()
             if self.leave:
-                self.leave_app(0)
+                self.leave_app(-1)
             self.loop.start()
         finally:
             if hasattr(self, "periodic_poll"):

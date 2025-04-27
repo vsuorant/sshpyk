@@ -540,8 +540,24 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if self.rem_proc_cmds is None:
             self.rem_proc_cmds: Dict[int, str] = {}  # Dict[pid, cmd]
 
+        if self.existing and self.persistent_file:
+            msg = f"Specify only {self.existing = !r} or {self.persistent_file = !r}"
+            raise RuntimeError(msg)
+
         self.persistent = bool(self.persistent_file) or self.persistent
-        if self.persistent and not self.persistent_file:
+
+        if self.existing:
+            fp = find_persistent_file(self.existing)
+            if not fp:
+                raise RuntimeError(f"Persistent info file {fp} not found")
+            self.li(f"Using existing persistent info file {fp}")
+            self.persistent_file = fp
+            with open(fp) as f:
+                info = json.load(f)
+            self.ld(f"Persistent info {info = }")
+            self.load_persistent_info(info)
+
+        if not self.persistent_file:
             # Store the persistent file in the Jupyter runtime directory by default,
             # it is already managed by jupyter in a secure way.
             fp = Path(jupyter_runtime_dir())
@@ -610,16 +626,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # loads local ip/ports/key/etc into KernelManager/Session
             self.load_connection_file()
 
-        if self.existing:
-            fp = find_persistent_file(self.existing)
-            if not fp:
-                raise RuntimeError(f"Persistent info file {fp} not found")
-            self.li(f"Using existing persistent info file {fp}")
-            with open(fp) as f:
-                info = json.load(f)
-            self.ld(f"Persistent info {info = }")
-            self.load_persistent_info(info)
-        else:
+        if not self.existing:
             await self.launch_remote_kernel()
 
         # Keep it outside `launch_remote_kernel()` because these PIDs can be loaded
@@ -944,6 +951,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.connection_info = km.get_connection_info()
         self.ld(f"Connection info local: {self.connection_info}")
 
+        self.patch_session_send()
+        self.write_persistent_info()
+
         self.li("Done launching kernel")  # just to signal everything should be ready
         return self.connection_info
 
@@ -996,7 +1006,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 self.rem_proc_cmds = {int(k): v for k, v in v.items()}
             else:
                 setattr(self, k, v)
-        self.li(f"Persistent info loaded {persistent_info = }")
+        self.li("Persistent info loaded")
 
     async def load_provisioner_info(self, provisioner_info: Dict) -> None:
         """Load information about this provisioner instance."""
@@ -1005,21 +1015,15 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     def write_persistent_info(self):
         """Write the provisioner info to a file."""
-        if not self.persistent_file or not self.persistent:
-            self.le(
-                f"Skipping persistent info write {self.persistent = }, "
-                f"{self.persistent_file = }"
-            )
-            return
         persistent_info = self.get_persistent_info()
         self.ld(f"Writing persistent info {persistent_info = }")
-        with secure_write(self.persistent_file, binary=False) as f:
+        with secure_write(self.persistent_file, binary=False) as f:  # type: ignore
             json.dump(persistent_info, f, indent=2)
-        fp = Path(self.persistent_file)
+        fp = Path(self.persistent_file)  # type: ignore
         self.li(f"Persistent file: {fp.absolute()}")
         kernel_name = self.parent.kernel_name  # type: ignore
         self.li(
-            f"To (re)connect to this remote kernel later launch a provisioner: "
+            f"To provision this remote kernel again: "
             f"`sshpyk-kernel --kernel {kernel_name} --existing {fp.name}`"
         )
 
@@ -1042,6 +1046,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     async def _cleanup(self, restart: bool = False) -> None:
         """Clean up resources used by the provisioner."""
+
+        # ! REMINDER: this function might be called more than once for the same shutdown
+
         self.ld(f"cleanup({restart = })")
         if self.ports_cached and not restart:
             lpc = LocalPortCache.instance()
@@ -1049,6 +1056,15 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 if k.endswith("_port"):
                     lpc.return_port(int(port))  # `int` to ensure type is correct
             self.ports_cached = False
+
+        if not self.persistent and self.persistent_file and not restart:
+            fp = Path(self.persistent_file)
+            try:
+                fp.unlink()
+                self.ld(f"Cleaned up persistent info file {fp}")
+            except FileNotFoundError:
+                self.lw(f"Persistent file not found: {fp}")
+            self.persistent_file = ""  # reset
 
         if self.kernel_tunnels_args:
             try:
@@ -1098,6 +1114,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if self.rem_pid_k:
             self.lw(f"Remote kernel RPID={self.rem_pid_k} was likely not killed")
             self.rem_pid_k = None
+
+        # ! REMINDER: this function might be called more than once for the same shutdown
 
     async def cleanup(self, restart: bool = False) -> None:
         async with self._cleanup_lock:  # type: ignore
@@ -1463,3 +1481,39 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         restart = self.restart_requested or restart
         if self.rem_pid_k:
             await self.send_sigterm_to_remote(self.rem_pid_k, SIGTERM)
+
+    def patch_session_send(self):
+        """
+        This patch is required because the KernelManager (self.parent) sends a shutdown
+        message itself to the control port of the remote kernel BEFORE the provisioner
+        can act on it. The provisioner only gets informed, i.e. provisioner's
+        shutdown_requested is called, AFTER the message has been sent to the kernel.
+
+        This patch intercepts that shutdown message and does not relay it to the remote
+        kernel when shuting down (restart=False) and self.persistent = True.
+        """
+        self.session_send_orig = self.parent.session.send
+
+        def send(stream, msg_or_type, *args, **kwargs):
+            if isinstance(msg_or_type, dict):
+                if msg_or_type.get("msg_type", None) == "shutdown_request":
+                    restart = msg_or_type.get("content", {}).get("restart", False)
+                    if self.persistent and not restart:
+                        self.li(
+                            "Intercepted shutdown_request from KernelManager. "
+                            "Remote kernel will persist."
+                        )
+                        # Make the SSHProvisioner forget about the remote kernel and
+                        # proceed with the local clean up
+                        self.rem_pid_k = None
+                        self.rem_pid_ka = None
+                        return
+            # For all other cases run as usual
+            return self.session_send_orig(stream, msg_or_type, *args, **kwargs)
+
+        self.parent.session.send = send
+        self.ld(
+            "Parent session.send patched to prevent remote kernel shutdown when "
+            "persistent=True"
+        )
+        return True
