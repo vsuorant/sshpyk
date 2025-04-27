@@ -931,12 +931,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # signature scheme specified in the command line.
         km.transport = rci["transport"]
         km.session.signature_scheme = rci["signature_scheme"]
-        key_prev, key_new = km.session.key, rci["key"].encode()
-        if key_prev and key_prev != key_new:
-            # Let it run if it works, some other error should be raised somewhere else
-            # if this is a problem.
-            self.lw(f"Session key was not preserved ({key_prev=} vs {key_new=}")
-            km.session.key = key_new
+        key_l, key_r = km.session.key, rci["key"].encode()
+        if key_l and key_l != key_r:
+            self.ld(f"Overriding local Session key with remote ({key_l=} vs {key_r=}")
+            km.session.key = key_r
 
         # This if-else is here bc LocalProvisioner does it
         if "env" in kwargs:
