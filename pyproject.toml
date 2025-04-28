@@ -5,7 +5,8 @@ description = "remote jupyter kernels via ssh tunnels"
 authors = [
     { name = "National Radio Astronomy Observatory", email = "casa-feedback@nrao.edu" },
 ]
-dependencies = ["jupyter-client"]
+# Confirmed to work on jupyter-client 8.6.3
+dependencies = ["jupyter-client>=7.0"]
 requires-python = ">=3.8"
 readme = "README.rst"
 license = { text = "BSD-3-Clause" }

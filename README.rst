@@ -4,6 +4,9 @@ Remote Jupyter Kernels via SSH
 Launch and connect securely to Jupyter kernels on remote machines via SSH with minimal
 configuration, as if they were local.
 
+ℹ️ Note
+  Currently, Windows is not supported as neither local nor remote machine.
+
 Quick Start
 ***********
 
@@ -17,41 +20,77 @@ Get up and running with sshpyk in minutes:
 
 See `Installation`_ for more details.
 
-2. Add a **dedicated** alias configuration entry in your SSH ``config`` file (typically ``~/.ssh/config``):
+2. Add a **DEDICATED** alias configuration entry in your SSH ``config`` file (typically ``~/.ssh/config``) with the following settings:
 
 .. code-block:: bash
 
-  # You can name the alias anything you want, but we recommend to include "sshpyk"
-  # in the name to remind yourself that this is a dedicated alias for sshpyk.
-  Host sshpyk_remote_server
+  # You can name the alias anything you want. We recommend to include "sshpyk"
+  # in the name to remind yourself that this is a DEDICATED alias for sshpyk.
+  Host remote_server_sshpyk
     HostName 192.168.1.100 # EDIT THIS
     User my_user_name_on_remote_server # EDIT THIS
     IdentityFile ~/.ssh/private_key_for_remote_server # EDIT THIS
+    # WARNING: ControlMaster/ControlPath/ControlPersist are mandatory and should be
+    # under a *DEDICATED* host alias, otherwise you will experience bad side effects
+    ControlMaster auto # must be `auto`
+    ControlPath ~/.ssh/sshpyk_%r@%h_%p # dir must exit!
+    ControlPersist 10m
+    # Other recommended configurations
     StrictHostKeyChecking no
     ServerAliveInterval 5
     ServerAliveCountMax 120000
     TCPKeepAlive yes
-    ControlMaster auto
-    ControlPath ~/.ssh/sshpyk_%r@%h_%p
-    ControlPersist 10m
     ConnectionAttempts 1
     ConnectTimeout 5
 
-See `Recommended SSH Config Setup`_ for more details.
+💡 Tip
+  If you already have an ssh host alias configured. You can prefix your host alias name
+  with a wildcard :code:`*` and then define a dedicated host alias prefixed
+  with, e.g., ``_sshpyk`` as follows. (Make sure the wildcard does not match other hosts
+  unintentionally!)
+
+  .. code-block:: bash
+
+    Host remote_server*
+      HostName 192.168.1.100 # EDIT THIS
+      User my_user_name_on_remote_server # EDIT THIS
+      IdentityFile ~/.ssh/private_key_for_remote_server # EDIT THIS
+      # Other recommended configurations
+      StrictHostKeyChecking no
+      ServerAliveInterval 5
+      ServerAliveCountMax 120000
+      TCPKeepAlive yes
+      ConnectionAttempts 1
+      ConnectTimeout 5
+
+    # Inherits the rest of the config from `remote_server*`
+    Host remote_server_sshpyk
+      # WARNING: ControlMaster/ControlPath/ControlPersist are mandatory and should be
+      # under a *DEDICATED* host alias, otherwise you will experience bad side effects
+      ControlMaster auto # must be `auto`
+      ControlPath ~/.ssh/sshpyk_%r@%h_%p # dir must exit!
+      ControlPersist 10m
+
+With this config you can ssh into your remote as usual with ``remote_server`` for all
+the purposes you are already used to. While ``remote_server_sshpyk`` will be used
+exclusively for ``sshpyk`` without interfering with your other ssh sessions.
+
+See `Recommended SSH Config`_ for more details.
 
 3. Ensure you have SSH access to your remote server and public key authentication is set up, you must connect without password prompt:
 
 .. code-block:: bash
 
-  ssh sshpyk_remote_server
+  ssh remote_server_sshpyk
 
 See `Authentication via Private/Public Key`_ for setting up SSH keys.
+If you are sure that the remote ``sshd`` does not allow authentication via private/public key see `Authentication via Password`_.
 
 4. Add a remote kernel (replace values with your configuration):
 
 .. code-block:: bash
 
-  sshpyk add --ssh-host-alias sshpyk_remote_server \
+  sshpyk add --ssh-host-alias remote_server_sshpyk \
               --kernel-name ssh_remote_python3 \
               --display-name "Remote Python 3.10" \
               --remote-python-prefix /path/to/python/env \
@@ -86,7 +125,7 @@ For development installation:
 Requirements:
 
 * On the local system: ``sshpyk`` and ``jupyter_client``
-* On the remote system: ``jupyter_client`` (which provides ``jupyter-kernel`` command)
+* On the remote system: ``jupyter_client``
 
 Managing SSH Jupyter Kernels Specifications
 *******************************************
@@ -149,7 +188,7 @@ You can list all available kernels using the ``list`` command:
   Name:                  ssh_mbp_ext
   Display Name:          Python 3.13 (Remote MBP)
   Resource Dir:          /Users/victor/Library/Jupyter/kernels/ssh_mbp_ext
-  Command (simplified):  ssh mbp_ext jupyter-kernel --KernelApp.kernel_name=python3 ...
+  Command (simplified):  ssh mbp_ext sshpyk-kernel --KernelApp.kernel_name=python3 ...
   Language:              python
   Interrupt Mode:        (v) message
   SSH Host Alias:        (v) mbp_ext
@@ -210,22 +249,18 @@ settings under a ``Host alias_name`` entry.
 This simplifies making an SSH connection to just ``$ ssh alias_name`` and have the
 SSH client use the settings defined under its ``Host alias_name`` entry.
 For simplicity and maximum flexibility, ``sshpyk`` does not manage any of the SSH ``config`` options.
-Instead we have a `Recommended SSH Config Setup`_ below.
-
-ℹ️ Note
-  Currently, Windows is not supported as neither local nor remote machine.
+Instead we have a `Recommended SSH Config`_ below.
 
 Recommended SSH Config
 ======================
 
 Your SSH configuration is typically stored in ``$HOME/.ssh/config``.
-We highly recommend a **dedicated** alias entry that looks like this:
+We recommend a wildcard host alias and a **DEDICATED** host alias named such that it
+matches the wildcard (or simply a dedicated host alias as shown in `Quick start`_):
 
 .. code-block:: bash
 
-  # You can name the alias anything you want, but we recommend to include "sshpyk"
-  # in the name to remind yourself that this is a dedicated alias for sshpyk.
-  Host sshpyk_remote_server
+  Host remote_server*
     # Required config: HostName/User/IdentityFile
     # ##################################################################################
     # IP address of the remote system
@@ -252,8 +287,17 @@ We highly recommend a **dedicated** alias entry that looks like this:
     ConnectionAttempts 1
     ConnectTimeout 5
     # ##################################################################################
+    # The port on the remote system that SSH server is listening on (22 is the default)
+    Port 22
+    # Optional, slightly less secure but recommended for this type of automation:
+    StrictHostKeyChecking no
 
-    # Performance and responsiveness: ControlMaster/ControlPath/ControlPersist
+    # ... rest of your config, if you know what you are doing
+
+  # You can suffix the alias with anything you want. We recommend to include "sshpyk"
+  # in the name to remind yourself that this is a dedicated alias for sshpyk.
+  Host remote_server_sshpyk
+    # Isolation, performance, responsiveness: ControlMaster/ControlPath/ControlPersist
     # ##################################################################################
     # Reuse existing connections to the remote server, this speeds up new connections
     # to the remote server by reusing a "master" connection. If a master connection
@@ -263,11 +307,12 @@ We highly recommend a **dedicated** alias entry that looks like this:
     # authentication.
     ControlMaster auto
     # The path to the control socket, this is used to manage the connection to the
-    # remote server. Keep them in a *dedicated* directory to avoid conflicts with other
-    # SSH connections and session to the same machine. Sharing the same control socket
-    # other non-sshpyk related SSH sessions might have unintended side effects.
-    # Make sure the dirs on the path to the control socket exist, otherwise strange
-    # unrelated errors will popup!
+    # remote server. Make sure to not use the same ControlPath for other host non-sshpyk
+    # aliases! This is to avoid conflicts with other SSH connections and session to the
+    # same machine. Sharing the same control socket with other non-sshpyk related SSH
+    # sessions might have unintended side effects.
+    # Make sure the dirs on the path to the control socket exist, otherwise unrelated
+    # errors might happen in sshpyk.
     ControlPath ~/.ssh/sshpyk_%r@%h_%p
     # Keep the master connection "warm" after the last time the SSH connection was used.
     # For connection stability and to speed up kernel restarts.
@@ -279,20 +324,14 @@ We highly recommend a **dedicated** alias entry that looks like this:
     ControlPersist 10m
     # ##################################################################################
 
-    # The port on the remote system that SSH server is listening on (22 is the default)
-    Port 22
-    # Optional, slightly less secure but recommended for this type of automation:
-    StrictHostKeyChecking no
 
-    # ... rest of your config, if you know what you are doing
-
-With this configuration, you can use ``sshpyk_remote_server`` as your ``--ssh-host-alias`` in ``sshpyk`` commands.
+With this configuration, you can use ``remote_server_sshpyk`` as your ``--ssh-host-alias`` in ``sshpyk`` commands.
 
 ⚠️ Warning
   Make sure that your alias name in the SSH ``config`` does not match any other alias
   "wildcards" in your SSH ``config`` unintentionally. For example, if you have an alias
-  ``*_remote_server`` in your SSH ``config``, these settings can affect
-  the ``sshpyk_remote_server`` as well, which might lead to unexpected behavior.
+  ``remote_*`` in your SSH ``config``, these settings can affect
+  the ``remote_server_sshpyk`` as well, which might lead to unexpected behavior.
 
 ‼️ Important
   ``ControlMaster: auto`` is mandatory for ``sshpyk`` to work.
@@ -331,17 +370,17 @@ Or manually add the contents of ``~/.ssh/private_key_for_remote_server.pub`` fro
 
 .. code-block:: bash
 
-  Host sshpyk_remote_server
+  Host remote_server_sshpyk
     HostName some.remote.server.com
     User remote_username
     IdentityFile ~/.ssh/private_key_for_remote_server
-    # ... the rest of the config as described in `Recommended SSH Config Setup`
+    # ... the rest of the config as described in `Recommended SSH Config`
 
 4. Test your connection, you should connect without being prompted for a password:
 
 .. code-block:: bash
 
-  ssh sshpyk_remote_server
+  ssh remote_server_sshpyk "sleep 1 && exit"
 
 Alternatives to Private/Public Key Authentication
 -------------------------------------------------
@@ -371,7 +410,7 @@ master SSH connection first:
     ControlPath ~/.ssh/sshpyk_%r@%h_%p
     # Set a very long persistence time or ControlPersist=yes for indefinite persistence
     ControlPersist 200h
-    # ... the rest of the config as described in `Recommended SSH Config Setup`
+    # ... the rest of the config as described in `Recommended SSH Config`
 
 2. Manually establish the master connection before attempting to start any ``sshpyk`` kernels:
 
@@ -410,7 +449,7 @@ For example in your SSH config you would add the following **dedicated** alias e
     HostName bastion.example.com
     User bastion-username
     IdentityFile ~/.ssh/id_rsa_bastion # required for automated login
-    # ... the rest of the config as described in `Recommended SSH Config Setup`
+    # ... the rest of the config as described in `Recommended SSH Config`
 
   Host sshpyk_internal_server
     HostName internal-server.example.com
@@ -418,11 +457,11 @@ For example in your SSH config you would add the following **dedicated** alias e
     IdentityFile ~/.ssh/id_rsa_internal # required for automated login
 
     ProxyJump sshpyk_bastion # this is the key line that enables the "jump" through the bastion
-    # ... the rest of the config as described in `Recommended SSH Config Setup`
+    # ... the rest of the config as described in `Recommended SSH Config`
 
 ‼️ Important
   For connection stability and performance, we highly recommend using the settings
-  described in `Recommended SSH Config Setup`_ along with using dedicated alias entries.
+  described in `Recommended SSH Config`_ along with using dedicated alias entries.
 
 This configuration allows you to:
 
@@ -466,7 +505,7 @@ Troubleshooting
 
 If you are running into issues, try first to restart your system 😉.
 
-Make sure you can ``ssh sshpyk_remote_server`` into your remote host without password prompts,
+Make sure you can ``ssh remote_server_sshpyk "sleep 1 && exit"`` into your remote host without password prompts,
 before attempting to launch the ``sshpyk`` kernel.
 
 To debug problems during kernel launch/shutdown/restart/etc., you can run a command similar to the following to see verbose logs:
@@ -484,13 +523,14 @@ You can share the log file with us if you are running into issues.
 Implementation Details
 ======================
 
-sshpyk integrates with Jupyter Client through the kernel provisioning API introduced in ``jupyter_client`` 7.0+.
+sshpyk integrates with Jupyter Client through the kernel provisioning API introduced in ``jupyter_client`` 7.0.
 It implements a custom ``KernelProvisionerBase`` subclass called ``SSHKernelProvisioner`` that:
 
 1. Establishes SSH connections to remote hosts
-2. Sets up port forwarding for kernel communication channels
+2. Copies the ``sshpyk-kernel`` launcher script to the remote (by default into ``$HOME/.sshpyk/``)
 3. Launches kernels on remote systems
-4. Manages the lifecycle of remote kernels
+4. Sets up port forwarding for kernel communication channels using ``ssh -O forward -L ...`` control master commands
+5. Manages the lifecycle of remote kernels
 
 The provisioner is registered as an entry point in ``pyproject.toml``, making it available to any
 Jupyter application that uses ``jupyter_client``.
