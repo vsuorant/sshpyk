@@ -174,7 +174,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         "remote kernel will be written. If the directory does not exist, it will be "
         "created.",
         allow_none=False,
-        default_value="~/.sshpyk",
+        default_value="$HOME/.sshpyk",
     )
     existing = Unicode(**EXISTING)  # type: ignore
     persistent = Bool(**PERSISTENT)  # type: ignore
@@ -585,9 +585,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         remote_script_fp = self.make_remote_script_fp()
         script = f"#!{self.remote_python_prefix}/bin/python\n{KERNELAPP_PY}"
         cmd = [
-            f"mkdir -p {self.remote_script_dir}",
-            f"cat > {remote_script_fp} < /dev/stdin",
-            f"chmod 755 {remote_script_fp}",
+            f"mkdir -p {self.remote_script_dir!r}",
+            f"cat > {remote_script_fp!r} < /dev/stdin",
+            f"chmod 755 {remote_script_fp!r}",
             f"echo {EXEC_PREFIX}=$?",
         ]
         self.ld(f"Remote command {cmd = }")
@@ -699,10 +699,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         remote_script_fp = self.make_remote_script_fp()
         sig_scheme = self.parent.session.signature_scheme  # type: ignore
         rem_args = [
-            remote_script_fp,
-            f"--SSHKernelApp.kernel_name={self.remote_kernel_name}",
-            f"--KernelManager.transport={self.parent.transport}",  # type: ignore
-            f"--ConnectionFileMixin.Session.signature_scheme={sig_scheme}",
+            f"{remote_script_fp!r}",
+            f"--SSHKernelApp.kernel_name={self.remote_kernel_name!r}",
+            f"--KernelManager.transport={self.parent.transport!r}",  # type: ignore
+            f"--ConnectionFileMixin.Session.signature_scheme={sig_scheme!r}",
             # Generating the configuration file on the remote upfront did not work
             # because the jupyter command on the remote seemed to
             # override the connection ports and the key in the connection file.
@@ -723,7 +723,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # While self._connection_file_written has initial value set to `False`.
         if self.restart_requested:
             # The contents will be overwritten, but at least the same file is used.
-            rem_args.append(f"--KernelManager.connection_file='{self.rem_conn_fp}'")
+            rem_args.append(f"--KernelManager.connection_file={self.rem_conn_fp!r}")
 
         # Simply specifying the connection file does not work because the
         # remote SSHKernelApp overrides the contents of the connection file.
@@ -733,7 +733,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # ! the remote machine you can run e.g. `ps aux | grep sshpyk-kernel`
         # ! and see the key in plain text in the command. We therefore
         # ! communicate it securely using the stdin pipe of the ssh process below.
-        rem_args.append("--ConnectionFileMixin.Session.keyfile=/dev/stdin")
+        rem_args.append("--ConnectionFileMixin.Session.keyfile='/dev/stdin'")
 
         km = self.parent  # KernelManager
         if not km.session.key:
@@ -749,7 +749,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # Print `uname` of remote system
             f"echo -n '{UNAME_PREFIX}='",
             "uname -a",
-            f"FPJ={remote_script_fp}",
+            f"FPJ={remote_script_fp!r}",
             'test -e "$FPJ" && test -r "$FPJ" && test -x "$FPJ"',
             f"echo {EXEC_PREFIX}=$?",
             # Print the PID of the remote SSHKernelApp process
@@ -860,7 +860,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         msg = (
             f"Try again after making sure you have `ControlMaster=auto` in "
             f"under your dedicated `Host {self.ssh_host_alias}` in your ssh config "
-            f"file (usually `~/.ssh/config`)."
+            f"file (usually `$HOME/.ssh/config`)."
         )
         if output:
             for line in output.splitlines():
