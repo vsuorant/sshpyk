@@ -570,6 +570,11 @@ You can interact with the kernel using e.g. ``jupyter-console`` (a jupyter clien
   It is **NOT** the persistence file created by ``sshpyk-kernel``.
   Similarly, this path is printed in the logs of the ``sshpyk-kernel`` command.
 
+💡 Tip
+  You can press ``Ctrl+D`` in the ``jupyter-console`` to leave the application without shutting down the kernel.
+  Calling ``exit()``/``quit()`` in the ``ipython`` shell or a in notebook will still shutdown the kernel.
+  This is expected behavior. The remote ``SSHKernelApp`` python script will detect this and shutdown itself.
+
 Interactive Controls
 ====================
 
