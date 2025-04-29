@@ -17,9 +17,12 @@ from jupyter_client.provisioning.provisioner_base import KernelProvisionerBase
 from jupyter_client.session import new_id_bytes
 from jupyter_core.paths import jupyter_runtime_dir, secure_write
 from traitlets import Bool, Integer, Unicode
+from traitlets import List as TraitletList
+from traitlets import Tuple as TraitletTuple
 
 from .kernelapp import EXISTING, PERSISTENT, PERSISTENT_FILE
 from .utils import (
+    EMPTY_SSH_CONFIG,
     LAUNCH_TIMEOUT,
     RGX_UNAME_PREFIX,
     SHUTDOWN_TIME,
@@ -68,21 +71,6 @@ def is_zombie(state: str) -> bool:
     return "z" in state.lower()
 
 
-class SshHost(Unicode):
-    def validate(self, obj, value):
-        value = super().validate(obj, value)
-        try:
-            if not RGX_SSH_HOST_ALIAS.match(value):
-                raise ValueError(
-                    f"Invalid SSH host alias {value!r}. "
-                    f"Must match this pattern {RGX_SSH_HOST_ALIAS.pattern}. "
-                    "Verify that it is defined in your local SSH config file."
-                )
-            return value
-        except UnicodeEncodeError:
-            self.error(obj, value)
-
-
 class UnicodePath(Unicode):
     def validate(self, obj, value):
         value = super().validate(obj, value)
@@ -115,19 +103,22 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     for kernel communication, and manages the lifecycle of the remote kernel.
     """
 
-    ssh_host_alias = SshHost(
+    ssh_login = Unicode(
         config=True,
-        help="Remote host alias to connect to. "
-        "It must be defined in your local SSH config file.",
+        help="Remote user&host. Must be specified as `remote_user@remote.host.com` OR"
+        "OR an `ssh_host_alias` defined as `Host ssh_host_alias` in your ssh config "
+        "file, typically `$HOME/.ssh/config`. Tip: you can override the ssh config "
+        "used by sshpyk by specifying the `ssh_config_file` option.",
         allow_none=False,
     )
-    remote_python_prefix = UnicodePath(
+    remote_python = UnicodePath(
         config=True,
-        help="Path to Python prefix on remote system. "
-        "Run `python -c 'import sys; print(sys.prefix)'` on the remote system "
-        "to find the path. If the remote kernel is part of a virtual environment, "
-        "first activate your virtual environment and then query the `sys.prefix`. "
-        "It must have jupyter_client package installed.",
+        help="Path to the Python executable on the remote system. "
+        "Run `which python` on the remote system to find its path. "
+        "If the remote kernel is part of a virtual environment (e.g. conda env), "
+        "first activate your virtual environment and then run `which python`. "
+        "Note that `jupyter_client` package must be installed on the remote. "
+        "You can confirm it with `python -m pip show jupyter_client'.",
         allow_none=False,
     )
     remote_kernel_name = KernelName(
@@ -179,9 +170,22 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     existing = Unicode(**EXISTING)  # type: ignore
     persistent = Bool(**PERSISTENT)  # type: ignore
     persistent_file = Unicode(**PERSISTENT_FILE)  # type: ignore
+    ssh_config_file = UnicodePath(
+        config=True,
+        help="TODO",
+        allow_none=True,
+        default_value=None,
+    )
+    ssh_options = TraitletList(
+        trait=TraitletTuple(Unicode(), Unicode()),
+        allow_none=False,
+        help="TODO",
+    )
 
     restart_requested = False
     log_prefix = ""
+
+    ssh_cmd: List[str] = []
 
     _fetch_remote_processes_lock = None
     _poll_lock = None
@@ -305,7 +309,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     async def extract_from_script_write(
         self, process: subprocess.Popen, cmd: List[str]
     ):
-        self.ld(f"Waiting for remote connection file path from {cmd = }")
+        self.ld("Waiting to write remote script")
+        cmd_str = " ".join(cmd)
+        self.ld(f"{cmd_str = !r}")
         self.rem_exec_ok = None  # reset
         try:
             future = self.extract_from_process_pipes(
@@ -313,14 +319,16 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
             await asyncio.wait_for(future, timeout=self.launch_timeout)
         except TimeoutError as e:
-            msg = f"Timed out waiting {self.launch_timeout}s to write the remote script"
+            msg = f"Timed out waiting {self.launch_timeout}s to write remote script"
             self.le(msg)
             raise RuntimeError(msg) from e
 
         if not self.rem_exec_ok:
+            cmd = [*self.ssh_cmd, self.ssh_login]
             msg = (
-                "Remote SSHKernelApp script write failed. "
-                "Check your SSH connection and permissions on remote."
+                "Writing the remote SSHKernelApp script failed. "
+                f"Check your SSH connection ({' '.join(cmd)!r}) and "
+                "the remote user's file permissions manually."
             )
             self.le(msg)
             raise RuntimeError(msg)
@@ -339,7 +347,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         ```
         """
         self.rem_ready = False  # reset
-        self.ld(f"Waiting for remote connection file path from {cmd = }")
+        self.ld("Waiting for remote connection file path from")
+        cmd_str = " ".join(cmd)
+        self.ld(f"{cmd_str = !r}")
         try:
             future = self.extract_from_process_pipes(
                 process=process,
@@ -358,9 +368,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise RuntimeError(msg) from e
 
         if not self.rem_sys_name:
+            cmd = [*self.ssh_cmd, self.ssh_login]
             msg = (
-                f"Check your SSH connection manually `$ ssh {self.ssh_host_alias}`. "
-                f"Could not extract remote system name during {cmd = }."
+                f"Check your SSH connection manually with {' '.join(cmd)!r}. "
+                "Could not extract remote system name."
             )
             self.le(msg)
             raise RuntimeError(msg)
@@ -371,12 +382,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise RuntimeError(msg)
 
         if not self.rem_pid_ka:
-            msg = f"Could not extract PID of remote process during {cmd = }"
+            msg = "Could not extract PID of remote process"
             self.le(msg)
             raise RuntimeError(msg)
 
         if not self.rem_conn_fp:
-            msg = f"Could not extract connection file path on remote during {cmd = }"
+            msg = "Could not extract connection file path on remote"
             self.le(msg)
             raise RuntimeError(msg)
 
@@ -392,9 +403,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # For details on the way the processes are spawned see the Popen call in
             # pre_launch().
             cmd = [
-                self.ssh,
-                "-q",
-                self.ssh_host_alias,
+                *self.ssh_cmd,
+                self.ssh_login,
                 f"echo {PID_PREFIX_KERNEL}=$(pgrep -P {self.rem_pid_ka}); "
                 # print the connection file on a single line prefixed with a string
                 # so that we can parse it later
@@ -509,12 +519,36 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         cf = getattr(km, "connection_file", None)
         if not cf:
             return
-        cf = Path(cf).absolute()
+        cf = Path(cf).resolve()
         if cf.is_file():
             # loads transport, ip, ports, key and signature_scheme
             # in KernelManager/Session
             km.load_connection_file(cf)  # type: ignore
             self.cf_loaded = True
+
+    def make_base_ssh_command(self):
+        if not self.ssh:
+            raise RuntimeError(f"Unexpected {self.ssh = }")
+        self.ssh_cmd = [self.ssh]
+        if self.ssh_config_file:
+            fp = Path(self.ssh_config_file).resolve()
+            if not fp.is_file():
+                raise RuntimeError(
+                    f"SSH config file {fp} does not exit! "
+                    "Create the file or edit your sshpyk kernel."
+                )
+            self.ssh_cmd += ["-F", str(fp)]
+        elif not self.ssh_config_file and "@" in self.ssh_login:
+            # The user did not specify an ssh alias, force empty ssh config
+            fp_default = Path.home() / ".ssh" / "sshpyk_empty_ssh_config"
+            if not fp_default.is_file():
+                fp_default.parent.mkdir(exist_ok=True, parents=True)
+                with secure_write(str(fp_default)) as f:
+                    f.write(EMPTY_SSH_CONFIG)
+
+        if self.ssh_options:
+            self.ssh_cmd += [f"-o{opt}={value!r}" for opt, value in self.ssh_options]
+        self.li(f"Base local ssh command: {' '.join(self.ssh_cmd)}")
 
     def pre_launch_init(self):
         """Initialize the provisioner on the first launch."""
@@ -531,7 +565,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self._launch_lock = asyncio.Lock()
         self._ensure_tunnels_lock = asyncio.Lock()
         self.log_prefix = f"[{LOG_NAME}{str(id(self))[-3:]}] "
-        k_conf = self.ssh_host_alias, self.remote_python_prefix, self.remote_kernel_name
+        k_conf = self.ssh_login, self.remote_python, self.remote_kernel_name
         if not all(k_conf):
             raise ValueError("Bad kernel configuration.")
 
@@ -574,6 +608,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if self.parent is None:
             raise RuntimeError("Parent KernelManager not set")
 
+        self.make_base_ssh_command()
+
         # ! REMINDER: this method is NOT called on kernel restarts.
 
     def make_remote_script_fp(self):
@@ -583,7 +619,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     async def write_remote_script(self):
         """Write the remote script on the remote machine."""
         remote_script_fp = self.make_remote_script_fp()
-        script = f"#!{self.remote_python_prefix}/bin/python\n{KERNELAPP_PY}"
+        script = f"#!{self.remote_python}\n{KERNELAPP_PY}"
         cmd = [
             f"mkdir -p {self.remote_script_dir!r}",
             f"cat > {remote_script_fp!r} < /dev/stdin",
@@ -592,7 +628,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         ]
         self.ld(f"Remote command {cmd = }")
         cmd = "; ".join(cmd)
-        cmd = [self.ssh, "-q", self.ssh_host_alias, cmd]
+        cmd = [*self.ssh_cmd, self.ssh_login, cmd]
         self.ld(f"Local command {cmd = }")
         process = subprocess.Popen(  # noqa: S603
             cmd,
@@ -709,6 +745,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # Better to not interfere with the launch of the remote kernel. Let it take
             # care of everything as configured on the remote system.
             # f"--KernelManager.connection_file='{self.rem_conn_fp}'",
+            # to allow users seeing the logs of the remote SSHKernelApp when enabling
+            # the local `--debug`.
+            "--debug",
         ]
 
         # When we restart the kernel use the same connection file and key, otherwise it
@@ -760,10 +799,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         cmd = "; ".join(cmd_parts)
         self.ld(f"Remote command {cmd = }")
         cmd = [
-            self.ssh,
-            "-q",  # mute ssh output
+            *self.ssh_cmd,
             # "-t",  # ! We don't need a pseudo-tty to be allocated
-            self.ssh_host_alias,
+            self.ssh_login,
             cmd,
         ]
         self.ld(f"Local command {cmd = }")
@@ -839,14 +877,16 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if not self.restart_requested:
             self.pick_kernel_local_ports()
         await self.make_kernel_tunnels_args()  # closes old tunnels if needed
+        if not self.kernel_tunnels_args:
+            raise RuntimeError(f"Unexpected {self.kernel_tunnels_args = }")
         cmd = [
-            self.ssh,
+            *self.ssh_cmd,
             "-O",  # mute ssh output
             "forward",  # do nothing, i.e. maintain the tunnels alive
             *self.kernel_tunnels_args,  # ssh tunnels within the same command
-            self.ssh_host_alias,
+            self.ssh_login,
         ]
-        self.ld(f"Ensuring kernel tunnels {cmd = }")
+        self.ld(f"Ensuring kernel tunnels cmd_str = {' '.join(cmd)!r}")
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=subprocess.PIPE,
@@ -859,7 +899,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         output = std_out.decode().strip()
         msg = (
             f"Try again after making sure you have `ControlMaster=auto` in "
-            f"under your dedicated `Host {self.ssh_host_alias}` in your ssh config "
+            f"under your dedicated `Host {self.ssh_login}` in your ssh config "
             f"file (usually `$HOME/.ssh/config`)."
         )
         if output:
@@ -868,10 +908,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 if "control socket" in line.lower():
                     self.lw(
                         "You seem to have lost the control socket "
-                        f"(e.g. WiFi disconnected). Make sure {self.ssh_host_alias} is "
+                        f"(e.g. WiFi disconnected). Make sure {self.ssh_login} is "
                         "reachable. If you had run "
-                        f"`ssh -M -f -N {self.ssh_host_alias}` "
-                        f"to input the login password for {self.ssh_host_alias} "
+                        f"`ssh -M -f -N {self.ssh_login}` "
+                        f"to input the login password for {self.ssh_login} "
                         "before starting the kernel, you have to manually run it again."
                     )
         # The `ssh -O forward` command is expected to exit cleanly (code 0)
@@ -883,15 +923,15 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
             self.le(msg)
         else:
-            self.ld(f"Tunnels to {self.ssh_host_alias} for kernel ports opened")
+            self.ld(f"Tunnels to {self.ssh_login} for kernel ports opened")
 
     async def close_tunnels(self, tunnels_args: List[str]):
         cmd = [
-            self.ssh,
+            *self.ssh_cmd,
             "-O",  # mute ssh output
             "cancel",  # do nothing, i.e. maintain the tunnels alive
             *tunnels_args,  # ssh tunnels within the same command
-            self.ssh_host_alias,
+            self.ssh_login,
         ]
         self.ld(f"Closing tunnels {cmd = }")
         proc = await asyncio.create_subprocess_exec(
@@ -913,7 +953,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
             self.le(msg)
         else:
-            self.ld(f"Tunnels {tunnels_args} to {self.ssh_host_alias} closed")
+            self.ld(f"Tunnels {tunnels_args} to {self.ssh_login} closed")
 
     async def launch_kernel(
         self, cmd: List[str], **kwargs: Any
@@ -943,7 +983,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         else:
             km.write_connection_file()
         self.li(
-            f"Connection file on local machine: {Path(km.connection_file).absolute()}"
+            f"Connection file on local machine: {Path(km.connection_file).resolve()}"
         )
 
         self.connection_info = km.get_connection_info()
@@ -1018,7 +1058,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         with secure_write(self.persistent_file, binary=False) as f:  # type: ignore
             json.dump(persistent_info, f, indent=2)
         fp = Path(self.persistent_file)  # type: ignore
-        self.li(f"Persistent file: {fp.absolute()}")
+        self.li(f"Persistent file: {fp.resolve()}")
         kernel_name = self.parent.kernel_name  # type: ignore
         self.li(
             f"To provision this remote kernel again: "
@@ -1174,9 +1214,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         else:  # assume unix
             comm = "args"  # ? does this displays the full command on unix?
         cmd = [
-            self.ssh,
-            "-q",
-            self.ssh_host_alias,
+            *self.ssh_cmd,
+            self.ssh_login,
             # print the output of ps prefixed with a string so that we can ignore all
             # the output before that
             f"echo '{PS_PREFIX}' && ps -p {pids_str} -o pid,state,{comm}",
@@ -1395,7 +1434,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if signum not in (SIGINT, SIGTERM, SIGKILL):
             raise ValueError(f"Invalid signal number {signum}")
         try:
-            cmd = [self.ssh, "-q", self.ssh_host_alias, f"kill -{signum} {pid}"]
+            cmd = [*self.ssh_cmd, self.ssh_login, f"kill -{signum} {pid}"]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,

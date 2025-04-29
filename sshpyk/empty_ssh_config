@@ -1,0 +1,2 @@
+# This us an empty file to allow the ssh commands to ignore the default ~/.ssh/config
+# Usage `$ ssh -F '/path/to/this/file' ...`

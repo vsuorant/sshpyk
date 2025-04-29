@@ -37,6 +37,7 @@ N = "\033[39m"  # Reset color only, not formatting
 K_NAME = "Name:"
 K_DISP = "Display Name:"
 K_RES = "Resource Dir:"
+K_SPEC = "Kernel spec:"
 K_CMD = "Command:"
 K_CMDS = "Command (simplified):"
 K_LANG = "Language:"
@@ -57,6 +58,7 @@ ALL_KEYS = [
     K_NAME,
     K_DISP,
     K_RES,
+    K_SPEC,
     K_CMD,
     K_CMDS,
     K_LANG,
@@ -297,7 +299,9 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
     """Format SSH kernel information for display."""
     k_lines.append(f"{C}{K_NAME:<{K_LEN}}{N} {kernel['name']}")
     k_lines.append(f"{C}{K_DISP:<{K_LEN}}{N} {kernel['display_name']}")
-    k_lines.append(f"{C}{K_RES:<{K_LEN}}{N} {kernel['resource_dir']}")
+    # For sshpyk kernels display the json file that should always exist
+    fp_spec = Path(kernel["resource_dir"]) / "kernel.json"
+    k_lines.append(f"{C}{K_SPEC:<{K_LEN}}{N} {fp_spec}")
     ssh_command = (
         f"ssh {kernel['host']} sshpyk-kernel "
         f"--SSHKernelApp.kernel_name={kernel['remote_kernel_name']} ..."
