@@ -586,6 +586,20 @@ Example ``kernel.json`` created by ``sshpyk add``:
     }
   }
 
+Programmatic Usage in Python
+============================
+
+The ``demo.py`` in the repository provides a complete example of how to use ``sshpyk`` programmatically:
+
+1. Launch a (persistent) remote kernel
+2. Execute interactive code on it
+3. Reconnect to the same kernel later
+4. Clean up resources
+
+For more information on interacting with the kernel programmatically,
+see the `jupyter_client documentation <https://jupyter-client.readthedocs.io/>`_
+or consult the ``provisioning.py`` source code for some inspiration.
+
 Development
 ***********
 
