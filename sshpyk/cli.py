@@ -565,17 +565,27 @@ def main() -> None:
     )
     add_parser.add_argument("--display-name", help="Display name for the kernel")
     add_parser.add_argument("--language", required=True, help="Kernel language")
-    add_parser.add_argument("--ssh-host-alias", required=True, help="SSH host alias")
+    add_parser.add_argument(
+        "--ssh-host-alias",
+        required=True,
+        help="Remote host alias to connect to. It must be defined in your local SSH "
+        "config file.",
+    )
     add_parser.add_argument(
         "--remote-python",
         required=True,
-        help="Path to Python executable on remote system",
+        help="Path to the Python executable on the remote system. Run `which python` "
+        "on the remote system to find its path. If the remote kernel is part of a "
+        "virtual environment (e.g. conda env), first activate your virtual "
+        "environment and then run `which python`. Note that `jupyter_client` "
+        "package must be installed on the remote. You can confirm it with "
+        "`python -m pip show jupyter_client'.",
     )
     add_parser.add_argument(
         "--remote-kernel-name",
         required=True,
-        help="Kernel name on the remote system. "
-        "Use `jupyter kernelspec list` on the remote system to find it.",
+        help="Kernel name on the remote system (i.e. first column of "
+        "`jupyter-kernelspec list` on the remote system).",
     )
     add_parser.add_argument(
         "--launch-timeout",
@@ -597,8 +607,8 @@ def main() -> None:
     )
     add_parser.add_argument(
         "--ssh",
-        help="Path to SSH executable on local system. "
-        "If not specified, will be auto-detected.",
+        help="Path to SSH executable. If not specified, will be auto-detected using "
+        "'which ssh'.",
     )
     add_parser.set_defaults(func=add_kernel)
 
@@ -609,14 +619,24 @@ def main() -> None:
     )
     edit_parser.add_argument("--display-name", help="Display name for the kernel")
     edit_parser.add_argument("--language", help="Kernel language")
-    edit_parser.add_argument("--ssh-host-alias", help="SSH host alias")
     edit_parser.add_argument(
-        "--remote-python", help="Path to Python executable on remote system"
+        "--ssh-host-alias",
+        help="Remote host alias to connect to. It must be defined in your local SSH "
+        "config file.",
+    )
+    edit_parser.add_argument(
+        "--remote-python",
+        help="Path to the Python executable on the remote system. Run `which python` "
+        "on the remote system to find its path. If the remote kernel is part of a "
+        "virtual environment (e.g. conda env), first activate your virtual "
+        "environment and then run `which python`. Note that `jupyter_client` "
+        "package must be installed on the remote. You can confirm it with "
+        "`python -m pip show jupyter_client'.",
     )
     edit_parser.add_argument(
         "--remote-kernel-name",
-        help="Kernel name on the remote system. "
-        + "Use `jupyter kernelspec list` on the remote system to find it.",
+        help="Kernel name on the remote system (i.e. first column of "
+        "`jupyter-kernelspec list` on the remote system).",
     )
     edit_parser.add_argument(
         "--launch-timeout",
@@ -633,8 +653,8 @@ def main() -> None:
     )
     edit_parser.add_argument(
         "--ssh",
-        help="Path to SSH executable on local system. "
-        "If not specified, will be auto-detected.",
+        help="Path to SSH executable. If not specified, will be auto-detected using "
+        "'which ssh'.",
     )
     edit_parser.set_defaults(func=edit_kernel)
 
