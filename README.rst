@@ -7,6 +7,44 @@ configuration, as if they were local.
 ℹ️ Note
   Currently, Windows is not supported as neither local nor remote machine.
 
+Table of Contents
+=================
+
+- `Quick Start`_
+- `Installation`_
+- `Managing SSH Jupyter Kernels Specifications`_
+
+  * `Listing Available Kernels`_
+  * `Adding a Remote Kernel`_
+  * `Editing an Existing Kernel`_
+  * `Deleting a Kernel`_
+
+- `SSH Configuration`_
+
+  * `Understanding SSH Host Aliases`_
+  * `Recommended SSH Config`_
+  * `Authentication via Private/Public Key`_
+
+    + `Alternatives to Private/Public Key Authentication`_
+
+  * `Authentication via Password`_
+  * `Using Bastion/Jump Hosts`_
+
+- `Launching Remote Kernels from Command Line`_
+
+  * `Kernel Persistence`_
+  * `Interactive Controls`_
+  * `Integration with Jupyter`_
+  * `Programmatic Usage in Python`_
+
+- `Development`_
+
+  * `Run git hooks manually`_
+
+- `Troubleshooting`_
+- `Implementation Details`_
+- `Historical Note`_
+
 Quick Start
 ***********
 
@@ -207,7 +245,7 @@ Adding a Remote Kernel
 To add a new remote kernel, use the ``add`` command. For a remote kernel to work:
 
 * ``sshpyk`` must be installed on the local system (which depends on ``jupyter_client`` explicitly)
-* ``jupyter_client`` must be installed on the remote system (which provides ``jupyter-kernel`` command)
+* ``jupyter_client`` must be installed on the remote system
 
 Here's the help information for the ``add`` command:
 
@@ -480,8 +518,8 @@ and the SSH tunneling will be handled automatically according to your SSH ``conf
 💡 Tip
   You can of course have as many bastion hosts between you and the remote server as you want.
 
-Launching Remote Kernels from Command Line: ``sshpyk-kernel``
-*************************************************************
+Launching Remote Kernels from Command Line
+******************************************
 
 The ``sshpyk-kernel`` command is a command-line utility to launch remote kernels and manage their lifecycle.
 It uses the same provisioning system as the ``SSHKernelProvisioner`` but can be invoked directly to support use cases outside of Jupyter.
@@ -628,17 +666,14 @@ If you are running into issues, try first to restart your system 😉.
 Make sure you can ``ssh remote_server_sshpyk "sleep 1 && exit"`` into your remote host without password prompts,
 before attempting to launch the ``sshpyk`` kernel.
 
-To debug problems during kernel launch/shutdown/restart/etc., you can run a command similar to the following to see verbose logs:
+To debug problems during kernel launch/shutdown/restart/etc., you can launch the sshpyk kernel manually with verbose logging:
 
 .. code-block:: bash
 
-  # `grep SSHPYK` will filter the output to only show sshpyk logs
-  # We use `script` to save the output to a file and `jupyter lab --no-browser --debug`
-  # to run jupyter lab in debug mode. `script` allows to pass input to the jupyter lab
-  script -q jupyter_sshpyk.log jupyter lab --no-browser --debug | grep SSHPYK
+  sshpyk-kernel --kernel ssh_remote_python3 --debug
 
-This will save the output to a file and show it in real time.
-You can share the log file with us if you are running into issues.
+Read the logs, it will contain commands and output from the local/remote processes.
+You can open a new GitHub issue and share the output if you need help.
 
 Implementation Details
 ======================
