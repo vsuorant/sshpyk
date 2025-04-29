@@ -5,7 +5,7 @@ import re
 import signal
 import sys
 import uuid
-from signal import SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1
+from signal import SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGUSR1, SIGUSR2
 from typing import Any, Sequence, Union
 
 from jupyter_client import __version__  # type: ignore
@@ -155,7 +155,7 @@ class SSHKernelApp(JupyterApp):
                 if response == "" or response == "y":
                     self.shutdown(0)
                 elif response == "l":
-                    self.leave_app(0)
+                    self.leave_app(-2)
                 elif response == "r":
                     self.restart(0)
                 elif response == "i":
@@ -187,8 +187,7 @@ class SSHKernelApp(JupyterApp):
                 self.loop.add_callback_from_signal(self.restart, signo)
             elif signo == SIGQUIT:
                 self.loop.add_callback_from_signal(self.leave_app, signo)
-            elif signo == SIGTERM:
-                self.log.info(f"Shutting down on signal {signo}")
+            elif signo in (SIGTERM, SIGHUP, SIGUSR2):
                 self.loop.add_callback_from_signal(self.shutdown, signo)
             else:
                 self.log.debug(f"Unexpected signal {signo}")
@@ -201,6 +200,7 @@ class SSHKernelApp(JupyterApp):
         for sig, msg in (
             (SIGHUP, msg_shutdown),
             (SIGTERM, msg_shutdown),
+            (SIGUSR2, "to shutdown the remote kernel, ignoring persistent flags"),
             (SIGINT, "or press Ctrl+C to interrupt the kernel"),
             (SIGUSR1, "to restart the kernel"),
             (
@@ -227,39 +227,59 @@ class SSHKernelApp(JupyterApp):
     def shutdown(self, signo: int) -> None:
         """Shut down the application."""
         self.periodic_poll.stop()
-        msg = f"Shutting down on signal {signo}"
+
         if signo == 0:
             msg = "Shutting down on Ctrl+D"
+            # don't preserve kernel on Ctrl+D, otherwise the user has no simple way
+            # to shutdown the remote kernel without sending an explicit `exit()` to it
+            self.set_persistent(False)
         elif signo == -1:
+            msg = "Kernel quit, shutting down."
+        elif signo in (-2, -3):  # leave_app cases, already logged
             msg = None
+        elif signo == SIGUSR2:
+            msg = f"Shutting down remote kernel on signal {signo}"
+            self.set_persistent(False)
+        else:
+            msg = f"Shutting down on signal {signo}"
+
         if msg:
             self.log.info(msg)
+
         self.km.shutdown_kernel()
         self.loop.stop()
+
+    def set_persistent(self, persistent: bool) -> None:
+        """Set the persistent flag."""
+        p = getattr(self.km, "provisioner", None)
+        if p and hasattr(p, "persistent"):
+            # SSHKernelProvisioner checks this flag before deleting persistent_file
+            self.log.info(f"Setting {persistent = } (previous {p.persistent = })")
+            p.persistent = persistent
 
     def leave_app(self, signo: int) -> None:
         """Leave the application without shutting down the kernel."""
         c = self.__class__.__name__
-        msg = f"Leaving {c} on signal {signo}. Remote kernel will not be shutdown!"
-        if signo == 0:
+        # Enforce persistent, this is mainly to allow preserving the kernel even
+        # if the user launched the SSHKernelApp without the `--persistent` flag.
+        self.set_persistent(True)
+
+        if signo == -2:
             msg = "Leaving on Ctrl+D. Remote kernel will not be shutdown!"
-        elif signo == -1:
+        elif signo == -3:
             msg = "Leaving after kernel launch. Remote kernel will not be shutdown!"
+        else:
+            msg = f"Leaving {c} on signal {signo}. Remote kernel will not be shutdown!"
         self.log.info(msg)
+
         is_alive = self.km.is_alive()  # calls provisioner.poll()
         if not is_alive:
             self.log.error("Kernel is not running anymore!")
-            self.shutdown(signo)
-        else:
-            # Enforce persistent, this is mainly to allow preserving the kernel even
-            # if the user launched the SSHKernelApp without the `--persistent` flag.
-            p = getattr(self.km, "provisioner", None)
-            if p and hasattr(p, "persistent"):
-                # SSHKernelProvisioner checks this flag before deleting persistent_file
-                p.persistent = True
-            # allow provisioner to perform local cleanups (e.g. cancel ssh tunnels)
-            self.shutdown(signo)
-            self.loop.stop()
+            self.set_persistent(False)
+
+        # allow provisioner to perform local cleanups (e.g. cancel ssh tunnels)
+        self.shutdown(signo)
+        self.loop.stop()
 
     def restart(self, signo: int) -> None:
         """Restart the kernel."""
@@ -267,7 +287,9 @@ class SSHKernelApp(JupyterApp):
         if signo == 0:
             msg = "Restarting kernel on Ctrl+D"
         self.log.info(msg)
+        self.periodic_poll.stop()  # Otherwise we stack monitoring old process
         self.km.restart_kernel()
+        self.periodic_poll.start()
 
     async def poll(self) -> None:
         """Ensure the ssh tunnels are running."""
@@ -276,8 +298,7 @@ class SSHKernelApp(JupyterApp):
             if p:
                 # restart SSH tunnels (if not shutting down)
                 ret = await p.poll()
-                if ret is not None:
-                    self.log.info("Kernel quit, shutting down.")
+                if ret is not None and not self.km.shutting_down:
                     self.shutdown(-1)
 
     def log_connection_info(self) -> None:
@@ -296,7 +317,7 @@ class SSHKernelApp(JupyterApp):
             # Start the tunnel checker
             self.periodic_poll.start()
             if self.leave:
-                self.leave_app(-1)
+                self.leave_app(-3)
             self.loop.start()
         finally:
             if hasattr(self, "periodic_poll"):

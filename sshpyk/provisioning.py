@@ -990,6 +990,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.restart_requested = restart
         self.li(f"shutdown_requested({restart = })")
 
+        if self.session_send_orig:
+            # Restore the original session.send to avoid infinite recursion on restarts
+            self.parent.session.send = self.session_send_orig
+
     def get_persistent_info(self):
         """sync version of get_provisioner_info"""
         return {
@@ -1490,6 +1494,23 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if self.rem_pid_k:
             await self.send_sigterm_to_remote(self.rem_pid_k, SIGTERM)
 
+    def session_send(self, stream, msg_or_type, *args, **kwargs):
+        if isinstance(msg_or_type, dict):
+            if msg_or_type.get("msg_type", None) == "shutdown_request":
+                restart = msg_or_type.get("content", {}).get("restart", False)
+                if self.persistent and not restart:
+                    self.li(
+                        "Intercepted shutdown_request from KernelManager. "
+                        "Remote kernel will persist."
+                    )
+                    # Make the SSHProvisioner forget about the remote kernel and
+                    # proceed with the local clean up
+                    self.rem_pid_k = None
+                    self.rem_pid_ka = None
+                    return
+        # For all other cases run as usual
+        return self.session_send_orig(stream, msg_or_type, *args, **kwargs)
+
     def patch_session_send(self):
         """
         This patch is required because the KernelManager (self.parent) sends a shutdown
@@ -1500,28 +1521,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         This patch intercepts that shutdown message and does not relay it to the remote
         kernel when shuting down (restart=False) and self.persistent = True.
         """
-        self.session_send_orig = self.parent.session.send
-
-        def send(stream, msg_or_type, *args, **kwargs):
-            if isinstance(msg_or_type, dict):
-                if msg_or_type.get("msg_type", None) == "shutdown_request":
-                    restart = msg_or_type.get("content", {}).get("restart", False)
-                    if self.persistent and not restart:
-                        self.li(
-                            "Intercepted shutdown_request from KernelManager. "
-                            "Remote kernel will persist."
-                        )
-                        # Make the SSHProvisioner forget about the remote kernel and
-                        # proceed with the local clean up
-                        self.rem_pid_k = None
-                        self.rem_pid_ka = None
-                        return
-            # For all other cases run as usual
-            return self.session_send_orig(stream, msg_or_type, *args, **kwargs)
-
-        self.parent.session.send = send
-        self.ld(
-            "Parent session.send patched to prevent remote kernel shutdown when "
-            "persistent=True"
-        )
-        return True
+        if self.parent.session.send is not self.session_send:
+            self.session_send_orig = self.parent.session.send
+            self.parent.session.send = self.session_send
+            self.ld(
+                "Parent session.send patched to prevent remote kernel shutdown when "
+                "persistent=True"
+            )
