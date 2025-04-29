@@ -37,6 +37,7 @@ N = "\033[39m"  # Reset color only, not formatting
 K_NAME = "Name:"
 K_DISP = "Display Name:"
 K_RES = "Resource Dir:"
+K_SPEC = "Kernel spec:"
 K_CMD = "Command:"
 K_CMDS = "Command (simplified):"
 K_LANG = "Language:"
@@ -57,6 +58,7 @@ ALL_KEYS = [
     K_NAME,
     K_DISP,
     K_RES,
+    K_SPEC,
     K_CMD,
     K_CMDS,
     K_LANG,
@@ -166,7 +168,7 @@ def extract_ssh_kernel_info(
         "resource_dir": resource_dir,
         "language": language,
         "host": config.get("ssh_host_alias", ""),
-        "remote_python_prefix": config.get("remote_python_prefix", ""),
+        "remote_python": config.get("remote_python", ""),
         "remote_kernel_name": config.get("remote_kernel_name", ""),
         "launch_timeout": config.get("launch_timeout", LAUNCH_TIMEOUT),
         "shutdown_timeout": config.get("shutdown_timeout", SHUTDOWN_TIME),
@@ -248,7 +250,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
             exec_ok, _ = verify_rem_executable(
                 ssh_bin,
                 kernel["host"],
-                str(Path(kernel["remote_python_prefix"]) / "bin" / "python"),
+                kernel["remote_python"],
             )
             results["exec_ok"] = bool(exec_ok)
 
@@ -256,7 +258,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
             remote_specs = get_remote_kernel_specs(
                 ssh_bin,
                 kernel["host"],
-                kernel["remote_python_prefix"],
+                kernel["remote_python"],
                 remote_specs_cache,
             )
 
@@ -278,14 +280,14 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
     return results
 
 
-def get_remote_kernel_specs(ssh_bin, host, remote_python_prefix, remote_specs_cache):
+def get_remote_kernel_specs(ssh_bin, host, remote_python, remote_specs_cache):
     """Get remote kernel specifications, using cache if available."""
     if host not in remote_specs_cache:
         try:
             remote_specs_cache[host] = fetch_remote_kernel_specs(
                 ssh_bin,
                 host,
-                str(Path(remote_python_prefix) / "bin" / "python"),
+                remote_python,
             )
         except Exception:
             remote_specs_cache[host] = {}
@@ -297,7 +299,9 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
     """Format SSH kernel information for display."""
     k_lines.append(f"{C}{K_NAME:<{K_LEN}}{N} {kernel['name']}")
     k_lines.append(f"{C}{K_DISP:<{K_LEN}}{N} {kernel['display_name']}")
-    k_lines.append(f"{C}{K_RES:<{K_LEN}}{N} {kernel['resource_dir']}")
+    # For sshpyk kernels display the json file that should always exist
+    fp_spec = Path(kernel["resource_dir"]) / "kernel.json"
+    k_lines.append(f"{C}{K_SPEC:<{K_LEN}}{N} {fp_spec}")
     ssh_command = (
         f"ssh {kernel['host']} sshpyk-kernel "
         f"--SSHKernelApp.kernel_name={kernel['remote_kernel_name']} ..."
@@ -317,7 +321,7 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
     if check_res["interrupt_mode_remote"]:
         k_lines.append(f"{C}{K_RINT:<{K_LEN}}{N} {check_res['interrupt_mode_remote']}")
     c = format_check(check_res["exec_ok"])
-    k_lines.append(f"{C}{K_EXE:<{K_LEN}}{N} {c} {kernel['remote_python_prefix']}")
+    k_lines.append(f"{C}{K_EXE:<{K_LEN}}{N} {c} {kernel['remote_python']}")
     c = format_check(check_res["kernel_ok"])
     k_lines.append(f"{C}{K_RKER:<{K_LEN}}{N} {c} {kernel['remote_kernel_name']}")
     k_lines.append(f"{C}{K_TIME:<{K_LEN}}{N} {kernel['launch_timeout']}")
@@ -346,12 +350,12 @@ def add_kernel(args: argparse.Namespace) -> None:
     if (
         not args.display_name
         or not args.ssh_host_alias
-        or not args.remote_python_prefix
+        or not args.remote_python
         or not args.remote_kernel_name
     ):
         print(
             "Error: --display-name, --ssh-host-alias, "
-            "--remote-python-prefix, and --remote-kernel-name are required."
+            "--remote-python, and --remote-kernel-name are required."
         )
         sys.exit(1)
 
@@ -387,7 +391,7 @@ def add_kernel(args: argparse.Namespace) -> None:
     config = {
         "ssh": args.ssh or None,
         "ssh_host_alias": args.ssh_host_alias,
-        "remote_python_prefix": args.remote_python_prefix,
+        "remote_python": args.remote_python,
         "remote_kernel_name": args.remote_kernel_name,
     }
     if args.launch_timeout:
@@ -478,8 +482,8 @@ def edit_kernel(args: argparse.Namespace) -> None:
             sys.exit(1)
         config["ssh_host_alias"] = args.ssh_host_alias
 
-    if args.remote_python_prefix:
-        config["remote_python_prefix"] = args.remote_python_prefix
+    if args.remote_python:
+        config["remote_python"] = args.remote_python
 
     if args.remote_kernel_name:
         if not RGX_KERNEL_NAME.match(args.remote_kernel_name):
@@ -563,9 +567,9 @@ def main() -> None:
     add_parser.add_argument("--language", required=True, help="Kernel language")
     add_parser.add_argument("--ssh-host-alias", required=True, help="SSH host alias")
     add_parser.add_argument(
-        "--remote-python-prefix",
+        "--remote-python",
         required=True,
-        help="Path to Python prefix on remote system",
+        help="Path to Python executable on remote system",
     )
     add_parser.add_argument(
         "--remote-kernel-name",
@@ -607,7 +611,7 @@ def main() -> None:
     edit_parser.add_argument("--language", help="Kernel language")
     edit_parser.add_argument("--ssh-host-alias", help="SSH host alias")
     edit_parser.add_argument(
-        "--remote-python-prefix", help="Path to Python prefix on remote system"
+        "--remote-python", help="Path to Python executable on remote system"
     )
     edit_parser.add_argument(
         "--remote-kernel-name",
