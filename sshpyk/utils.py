@@ -18,6 +18,9 @@ def inline_script(script: str):
 
 # Used to force SSH to not use the default config file
 EMPTY_SSH_CONFIG = (Path(__file__).parent / "empty_ssh_config").read_text()
+FP_DEFAULT_EMPTY_SSH_CONFIG = (
+    Path.home() / ".ssh" / "sshpyk_empty_ssh_config"
+).resolve()
 
 GET_ALL_SPECS_PY = inline_script(
     (Path(__file__).parent / "get_all_specs.py").read_text()

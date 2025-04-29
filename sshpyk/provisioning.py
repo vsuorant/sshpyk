@@ -23,6 +23,7 @@ from traitlets import Tuple as TraitletTuple
 from .kernelapp import EXISTING, PERSISTENT, PERSISTENT_FILE
 from .utils import (
     EMPTY_SSH_CONFIG,
+    FP_DEFAULT_EMPTY_SSH_CONFIG,
     LAUNCH_TIMEOUT,
     RGX_UNAME_PREFIX,
     SHUTDOWN_TIME,
@@ -529,22 +530,32 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     def make_base_ssh_command(self):
         if not self.ssh:
             raise RuntimeError(f"Unexpected {self.ssh = }")
+
         self.ssh_cmd = [self.ssh]
+
+        write_default_ssh_config = False
+
         if self.ssh_config_file:
             fp = Path(self.ssh_config_file).resolve()
             if not fp.is_file():
-                raise RuntimeError(
-                    f"SSH config file {fp} does not exit! "
-                    "Create the file or edit your sshpyk kernel."
-                )
-            self.ssh_cmd += ["-F", str(fp)]
-        elif not self.ssh_config_file and "@" in self.ssh_login:
+                if fp == FP_DEFAULT_EMPTY_SSH_CONFIG:
+                    write_default_ssh_config = True
+                else:
+                    raise RuntimeError(
+                        f"SSH config file {fp} does not exit! "
+                        "Create the file or edit your sshpyk kernel."
+                    )
+        if not self.ssh_config_file and "@" in self.ssh_login:
             # The user did not specify an ssh alias, force empty ssh config
-            fp_default = Path.home() / ".ssh" / "sshpyk_empty_ssh_config"
-            if not fp_default.is_file():
-                fp_default.parent.mkdir(exist_ok=True, parents=True)
-                with secure_write(str(fp_default)) as f:
-                    f.write(EMPTY_SSH_CONFIG)
+            write_default_ssh_config = True
+
+        if write_default_ssh_config and not FP_DEFAULT_EMPTY_SSH_CONFIG.is_file():
+            FP_DEFAULT_EMPTY_SSH_CONFIG.parent.mkdir(exist_ok=True, parents=True)
+            with secure_write(str(FP_DEFAULT_EMPTY_SSH_CONFIG)) as f:
+                f.write(EMPTY_SSH_CONFIG)
+
+        if self.ssh_config_file:
+            self.ssh_cmd += ["-F", self.ssh_config_file]
 
         if self.ssh_options:
             self.ssh_cmd += [f"-o{opt}={value!r}" for opt, value in self.ssh_options]
