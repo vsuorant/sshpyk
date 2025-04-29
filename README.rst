@@ -480,6 +480,112 @@ and the SSH tunneling will be handled automatically according to your SSH ``conf
 💡 Tip
   You can of course have as many bastion hosts between you and the remote server as you want.
 
+Launching Remote Kernels from Command Line: ``sshpyk-kernel``
+*************************************************************
+
+The ``sshpyk-kernel`` command is a command-line utility to launch remote kernels and manage their lifecycle.
+It uses the same provisioning system as the ``SSHKernelProvisioner`` but can be invoked directly to support use cases outside of Jupyter.
+
+.. code-block:: bash
+
+  $ sshpyk-kernel --help
+
+When running in an interactive terminal, you can use ``Ctrl+D`` to show a menu to shutdown, interrupt, restart, or leave the command without shutting down the kernel.
+More information will be printed in the logs when running the command.
+
+Kernel Persistence
+==================
+
+The ``sshpyk-kernel`` command supports kernel persistence through the following options:
+
+* ``--persistent``: If True, the remote kernel will be left running on shutdown so you can reconnect to it later.
+* ``--persistent-file``: Path to save persistence info. If provided, ``--persistent`` is overridden to True. A default path will be used if not provided.
+* ``--existing``: Connect to an existing kernel using a previously saved persistence info file.
+* ``--leave``: Launch the kernel and exit command right away.
+
+Example of creating a persistent kernel:
+
+.. code-block:: bash
+
+  # Create a persistent kernel
+  sshpyk-kernel --kernel=demo_remote --persistent
+
+Later, reconnect to the same kernel (the path will be printed in the logs of the previous command):
+
+.. code-block:: bash
+
+  sshpyk-kernel --kernel=demo_remote --existing=sshpyk-kernel-1c9ce85b-f722-41e5-970a-13cfdd44fbfb.json
+
+ℹ️ Note
+  ``--existing`` here is a path to a persistence file created by ``sshpyk-kernel``,
+  **NOT** the typical jupyter connection file!
+
+You can interact with the kernel using e.g. ``jupyter-console`` (a jupyter client launches an ``ipython`` shell):
+
+.. code-block:: bash
+
+  pip install jupyter-console # if not already installed
+  jupyter-console --existing=kernel-a3b70f44-6b9a-4f82-a6b8-dd736f04b888.json
+
+ℹ️ Note
+  ``--existing`` here is a path to the local connection file, in the typical jupyter connection file format.
+  It is **NOT** the persistence file created by ``sshpyk-kernel``.
+  Similarly, this path is printed in the logs of the ``sshpyk-kernel`` command.
+
+Interactive Controls
+====================
+
+When running in an interactive terminal, you can use:
+
+* ``Ctrl+D``: Shows a menu to interrupt, shutdown, restart, or leave the command without shutting down the kernel
+* ``Ctrl+C``: Interrupts the kernel
+* ``Ctrl+\`` (backslash): Leaves the application without shutting down the kernel
+
+If you invoke ``sshpyk-kernel`` from a non-interactive shell, you can use signals to control the kernel:
+
+* ``SIGTERM``: Shuts down the kernel, unless ``--persistent`` or ``--persistent-file`` have been passed
+* ``SIGHUP``: Shuts down the kernel, unless ``--persistent`` or ``--persistent-file`` have been passed
+* ``SIGINT``: Interrupts the kernel
+* ``SIGUSR1``: Restarts the kernel
+* ``SIGUSR2``: Shuts down the remote kernel, ignoring ``--persistent`` or ``--persistent-file``
+* ``SIGQUIT``: Leaves the application without shutting down the kernel
+
+* ``SIGKILL``: this signal cannot be caught, it will kill the local command without any local nor remote cleanup. Not recommended. Use only as last resort.
+
+Integration with Jupyter
+=======================
+
+The command is designed to work with Jupyter's kernel specification system.
+When you add a remote kernel using ``sshpyk add``, the command is automatically configured in the kernel spec file (``kernel.json``).
+This allows applications external to Jupyter the jupyter ecosystem to launch the remote kernel and connect to it.
+
+Example ``kernel.json`` created by ``sshpyk add``:
+
+.. code-block:: json
+
+  {
+    "argv": [
+      "/opt/homebrew/anaconda3/envs/g/bin/python",
+      "/opt/homebrew/anaconda3/envs/g/bin/sshpyk-kernel",
+      "--SSHKernelApp.kernel_name=demo_remote",
+      "--KernelManager.connection_file='{connection_file}'"
+    ],
+    "display_name": "Python 3.9 (Remote Demo)",
+    "language": "python",
+    "interrupt_mode": "message",
+    "metadata": {
+      "kernel_provisioner": {
+        "provisioner_name": "sshpyk-provisioner",
+        "config": {
+          "ssh": null,
+          "ssh_host_alias": "sshpyk_mba",
+          "remote_python": "/usr/local/anaconda3/envs/f39/bin/python",
+          "remote_kernel_name": "python3"
+        }
+      }
+    }
+  }
+
 Development
 ***********
 
@@ -523,14 +629,14 @@ You can share the log file with us if you are running into issues.
 Implementation Details
 ======================
 
-sshpyk integrates with Jupyter Client through the kernel provisioning API introduced in ``jupyter_client`` 7.0.
+``sshpyk`` integrates with Jupyter Client through the kernel provisioning API introduced in ``jupyter_client`` 7.0.
 It implements a custom ``KernelProvisionerBase`` subclass called ``SSHKernelProvisioner`` that:
 
 1. Establishes SSH connections to remote hosts
 2. Copies the ``sshpyk-kernel`` launcher script to the remote (by default into ``$HOME/.sshpyk/``)
 3. Launches kernels on remote systems
 4. Sets up port forwarding for kernel communication channels using ``ssh -O forward -L ...`` control master commands
-5. Manages the lifecycle of remote kernels
+5. Manages the lifecycle of the remote kernel
 
 The provisioner is registered as an entry point in ``pyproject.toml``, making it available to any
 Jupyter application that uses ``jupyter_client``.
