@@ -868,33 +868,41 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # ##############################################################################
         std_out, _std_err = await proc.communicate()
         output = std_out.decode().strip()
+        lines = []
+        if output:
+            lines = [line.strip() for line in output.splitlines()]
+
         msg = (
             f"Try again after making sure you have `ControlMaster=auto` in "
             f"under your dedicated `Host {self.ssh_host_alias}` in your ssh config "
             f"file (usually `$HOME/.ssh/config`)."
         )
-        if output:
-            for line in output.splitlines():
-                self.ld(f"[Process {proc.pid}] {line.strip()}")
-                if "control socket" in line.lower():
-                    self.lw(
-                        "You seem to have lost the control socket "
-                        f"(e.g. WiFi disconnected). Make sure {self.ssh_host_alias} is "
-                        "reachable. If you had run "
-                        f"`ssh -M -f -N {self.ssh_host_alias}` "
-                        f"to input the login password for {self.ssh_host_alias} "
-                        "before starting the kernel, you have to manually run it again."
-                    )
         # The `ssh -O forward` command is expected to exit cleanly (code 0)
-        # 255 is returned if the control socket is lost.
+        # 255 is returned if the control socket is lost, can happen sometimes
         if proc.returncode not in (0, 255):
             msg = (
                 f"Tunnels process PID={proc.pid} exited with unexpected "
                 f"{proc.returncode = }. " + msg
             )
-            self.le(msg)
+            log_func = self.le
         else:
-            self.ld(f"Tunnels to {self.ssh_host_alias} for kernel ports opened")
+            msg = f"Tunnels to {self.ssh_host_alias} for kernel ports opened"
+            log_func = self.ld
+
+        msg_warn = (
+            "You might have lost the control socket (e.g. WiFi disconnected). "
+            f"Make sure {self.ssh_host_alias} is reachable. If you had run "
+            f"`ssh -M -f -N {self.ssh_host_alias}` "
+            f"to input the login password for {self.ssh_host_alias} "
+            "before starting the kernel, you have to manually run it again."
+        )
+        for line in lines:
+            log_func(f"[Process {proc.pid}] {line}")
+            if "control socket" in line.lower():
+                log_func = log_func if log_func == self.le else self.lw
+                log_func(f"'ssh -O forward ...' said {line!r}. " + msg_warn)
+
+        log_func(msg)
 
     async def close_tunnels(self, tunnels_args: List[str]):
         cmd = [
