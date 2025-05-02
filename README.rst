@@ -687,7 +687,7 @@ Implementation Details
 It implements a custom ``KernelProvisionerBase`` subclass called ``SSHKernelProvisioner`` that:
 
 1. Establishes SSH connections to remote hosts
-2. Copies the ``sshpyk-kernel`` launcher script to the remote (by default into ``$HOME/.sshpyk/``)
+2. Copies the ``sshpyk-kernel`` launcher script to the remote (by default into ``$HOME/.ssh/sshpyk/``, shell variables are expanded)
 3. Launches kernels on remote systems
 4. Sets up port forwarding for kernel communication channels using ``ssh -O forward -L ...`` control master commands
 5. Manages the lifecycle of the remote kernel

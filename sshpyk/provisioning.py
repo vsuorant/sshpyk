@@ -31,15 +31,15 @@ from .utils import (
 
 EXEC_PREFIX = "SSHPYK_KERNELAPP_EXEC"
 RGX_EXEC_PREFIX = re.compile(rf"{EXEC_PREFIX}=(\d+)")
-PS_PREFIX = "===PS_OUTPUT_START==="
+PS_PREFIX = "SSHPYK_PS_OUTPUT_START"
 RGX_PS_PREFIX = re.compile(rf"{PS_PREFIX}=(.+)")
-CONN_INFO_PREFIX = "CONNECTION_INFO_JSON"
+CONN_INFO_PREFIX = "SSHPYK_CONNECTION_INFO_JSON"
 RGX_CONN_INFO_PREFIX = re.compile(rf"{CONN_INFO_PREFIX}=(.+)")
 RGX_CONN_FP = re.compile(r"\[SSHKernelApp\].*file: (.*\.json)")
 RGX_CONN_CLIENT = re.compile(r"\[SSHKernelApp\].*client: (.*\.json)")
-PID_PREFIX_KERNEL_APP = "KERNEL_APP_PID"
+PID_PREFIX_KERNEL_APP = "SSHPYK_KERNEL_APP_PID"
 RGX_PID_KERNEL_APP = re.compile(rf"{PID_PREFIX_KERNEL_APP}=(\d+)")
-PID_PREFIX_KERNEL = "KERNEL_PID"
+PID_PREFIX_KERNEL = "SSHPYK_KERNEL_PID"
 RGX_PID_KERNEL = re.compile(rf"{PID_PREFIX_KERNEL}=(\d+)")
 REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
 # extracted from jupyter_client/kernelspec.py
@@ -173,9 +173,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         config=True,
         help="Path to a remote directory in which a script required to launch the "
         "remote kernel will be written. If the directory does not exist, it will be "
-        "created.",
+        "created. Mind that shell variables are expanded.",
         allow_none=False,
-        default_value="$HOME/.sshpyk",
+        # By default share the .ssh dir since that one is usually already present and
+        # we avoid polluting the remote user's home dir.
+        default_value="$HOME/.ssh/sshpyk",
     )
     existing = Unicode(**EXISTING)  # type: ignore
     persistent = Bool(**PERSISTENT)  # type: ignore
@@ -365,7 +367,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise RuntimeError(msg) from e
 
         if not self.rem_sys_name:
-            cmd = [*self.ssh_cmd, self.ssh_login]
+            cmd = [self.ssh, self.ssh_host_alias]  # type: ignore
             msg = (
                 f"Check your SSH connection manually with {' '.join(cmd)!r}. "
                 "Could not extract remote system name."
@@ -405,8 +407,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 f"echo {PID_PREFIX_KERNEL}=$(pgrep -P {self.rem_pid_ka}); "
                 # print the connection file on a single line prefixed with a string
                 # so that we can parse it later
-                + f"echo -n '{CONN_INFO_PREFIX}=' && "
-                + rf"cat {self.rem_conn_fp!r} | tr -d '\n' && echo ''",
+                + f"echo -n {CONN_INFO_PREFIX}=; "
+                # `r` string is raw string so that python does not interpret the `\`
+                + rf'cat "{self.rem_conn_fp}" | tr -d "\n" && echo ""',
             ]
             self.ld(f"Fetching remote connection file/kernel PID {cmd = }")
             proc = await asyncio.create_subprocess_exec(
@@ -592,14 +595,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         remote_script_fp = self.make_remote_script_fp()
         script = f"#!{self.remote_python}\n{KERNELAPP_PY}"
         cmd = [
-            f"mkdir -p {self.remote_script_dir!r}",
-            f"cat > {remote_script_fp!r} < /dev/stdin",
-            f"chmod 755 {remote_script_fp!r}",
+            f'mkdir -p "{self.remote_script_dir}"',
+            f'cat > "{remote_script_fp}" < /dev/stdin',
+            f'chmod 755 "{remote_script_fp}"',
             f"echo {EXEC_PREFIX}=$?",
         ]
         self.ld(f"Remote command {cmd = }")
-        cmd = "; ".join(cmd)
-        cmd = [self.ssh, self.ssh_host_alias, cmd]
+        cmd = [self.ssh, self.ssh_host_alias, "; ".join(cmd)]
         self.ld(f"Local command {cmd = }")
         process = subprocess.Popen(  # noqa: S603
             cmd,
@@ -706,10 +708,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         remote_script_fp = self.make_remote_script_fp()
         sig_scheme = self.parent.session.signature_scheme  # type: ignore
         rem_args = [
-            f"{remote_script_fp!r}",
-            f"--SSHKernelApp.kernel_name={self.remote_kernel_name!r}",
-            f"--KernelManager.transport={self.parent.transport!r}",  # type: ignore
-            f"--ConnectionFileMixin.Session.signature_scheme={sig_scheme!r}",
+            f'"{remote_script_fp}"',
+            f'--SSHKernelApp.kernel_name="{self.remote_kernel_name}"',
+            f'--KernelManager.transport="{self.parent.transport}"',  # type: ignore
+            f'--ConnectionFileMixin.Session.signature_scheme="{sig_scheme}"',
             # Generating the configuration file on the remote upfront did not work
             # because the jupyter command on the remote seemed to
             # override the connection ports and the key in the connection file.
@@ -733,7 +735,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # While self._connection_file_written has initial value set to `False`.
         if self.restart_requested:
             # The contents will be overwritten, but at least the same file is used.
-            rem_args.append(f"--KernelManager.connection_file={self.rem_conn_fp!r}")
+            rem_args.append(f'--KernelManager.connection_file="{self.rem_conn_fp}"')
 
         # Simply specifying the connection file does not work because the
         # remote SSHKernelApp overrides the contents of the connection file.
@@ -743,7 +745,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # ! the remote machine you can run e.g. `ps aux | grep sshpyk-kernel`
         # ! and see the key in plain text in the command. We therefore
         # ! communicate it securely using the stdin pipe of the ssh process below.
-        rem_args.append("--ConnectionFileMixin.Session.keyfile='/dev/stdin'")
+        rem_args.append("--ConnectionFileMixin.Session.keyfile=/dev/stdin")
 
         km = self.parent  # KernelManager
         if not km.session.key:
@@ -757,13 +759,12 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # For robustness print a variable name and we extract it with regex later
         cmd_parts = [
             # Print `uname` of remote system
-            f"echo -n '{UNAME_PREFIX}='",
-            "uname -a",
-            f"FPJ={remote_script_fp!r}",
-            'test -e "$FPJ" && test -r "$FPJ" && test -x "$FPJ"',
-            f"echo {EXEC_PREFIX}=$?",
+            f'echo "{UNAME_PREFIX}=$(uname -a)"',
+            f'FPJ="{remote_script_fp}"',
+            "test -e $FPJ && test -r $FPJ && test -x $FPJ",
+            f'echo "{EXEC_PREFIX}=$?"',
             # Print the PID of the remote SSHKernelApp process
-            f"echo {PID_PREFIX_KERNEL_APP}=$$",
+            f'echo "{PID_PREFIX_KERNEL_APP}=$$"',
             # Launch the SSHKernelApp
             f"exec nohup {cmd}",
         ]
@@ -1201,7 +1202,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ssh_host_alias,
             # print the output of ps prefixed with a string so that we can ignore all
             # the output before that
-            f"echo '{PS_PREFIX}' && ps -p {pids_str} -o pid,state,{comm}",
+            f'echo "{PS_PREFIX}" && ps -p {pids_str} -o pid,state,{comm}',
             # ? should we make it more robust and ensure that we got the full output?
             # E.g.
             # echo '{PS_PREFIX}'; ps -p 1234; PS_RET_CODE=$?; \
