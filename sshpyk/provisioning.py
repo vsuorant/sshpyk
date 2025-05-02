@@ -29,6 +29,7 @@ from .utils import (
     verify_local_ssh,
 )
 
+REMOTE_INFO_LINE = "SSHPYK_SHELL=$SHELL SSHPYK_HOST=$HOST SSHPYK_USER=$USER"
 EXEC_PREFIX = "SSHPYK_KERNELAPP_EXEC"
 RGX_EXEC_PREFIX = re.compile(rf"{EXEC_PREFIX}=(\d+)")
 PS_PREFIX = "SSHPYK_PS_OUTPUT_START"
@@ -593,8 +594,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     async def write_remote_script(self):
         """Write the remote script on the remote machine."""
         remote_script_fp = self.make_remote_script_fp()
+        self.li(
+            f"Will use {self.remote_python!r} on {self.ssh_host_alias!r} to run "
+            f"{remote_script_fp!r}"
+        )
         script = f"#!{self.remote_python}\n{KERNELAPP_PY}"
         cmd = [
+            # For debugging purposes
+            f'echo "{REMOTE_INFO_LINE}"',
             f'mkdir -p "{self.remote_script_dir}"',
             f'cat > "{remote_script_fp}" < /dev/stdin',
             f'chmod 755 "{remote_script_fp}"',
@@ -758,6 +765,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # `exec` ensures the `cmd` will have the same PID output by `echo $$`.
         # For robustness print a variable name and we extract it with regex later
         cmd_parts = [
+            # For debugging purposes
+            f'echo "{REMOTE_INFO_LINE}"',
             # Print `uname` of remote system
             f'echo "{UNAME_PREFIX}=$(uname -a)"',
             f'FPJ="{remote_script_fp}"',
