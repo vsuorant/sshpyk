@@ -744,15 +744,27 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # The contents will be overwritten, but at least the same file is used.
             rem_args.append(f'--KernelManager.connection_file="{self.rem_conn_fp}"')
 
+        # In case the remote system does not implement the (non-POSIX) /dev/stdin,
+        # try a few more common options. Ultimately, if needed we can adapt the code of
+        # the (remote) SSHKernelApp to accept the session key explicitly from stdin by
+        # setting some flag.
+        stdin_path = (
+            # Common on modern unix-like systems
+            "if test -e '/dev/stdin'; then echo '/dev/stdin'; "
+            # Linux
+            "elif test -e '/proc/self/fd/0'; then echo '/proc/self/fd/0'; "
+            # macOS / BSD
+            "elif test -e '/dev/fd/0'; then echo '/dev/fd/0'; fi"
+        )
         # Simply specifying the connection file does not work because the
-        # remote SSHKernelApp overrides the contents of the connection file.
-        # Using /dev/stdin does the trick of forcing the remote kernel to use the
-        # provided key (which we preserve on restarts).
+        # remote jupyter_client code overrides the contents of the connection file.
+        # Using stdin does the trick of forcing the remote kernel to use the
+        # provided key which we preserve on restarts to avoid jupyter errors.
         # ! if we input the session key directly here in plain text, then on
         # ! the remote machine you can run e.g. `ps aux | grep sshpyk-kernel`
         # ! and see the key in plain text in the command. We therefore
         # ! communicate it securely using the stdin pipe of the ssh process below.
-        rem_args.append("--ConnectionFileMixin.Session.keyfile=/dev/stdin")
+        rem_args.append(f"--ConnectionFileMixin.Session.keyfile=$({stdin_path})")
 
         km = self.parent  # KernelManager
         if not km.session.key:
@@ -813,7 +825,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # externally-provided connection files.
         # Communicate the session key to the remote process securely using the stdin
         # pipe of the ssh process.
-        process.stdin.write(km.session.key.decode() + "\n")
+        process.stdin.write(km.session.key.decode())
         process.stdin.flush()
         # Close the input pipe, see launch_kernel in jupyter_client
         # When we close the input pipe, the remote process will receive EOF and the
