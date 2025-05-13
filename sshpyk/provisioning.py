@@ -603,7 +603,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # For debugging purposes
             f'echo "{REMOTE_INFO_LINE}"',
             f'mkdir -p "{self.remote_script_dir}"',
-            f'cat > "{remote_script_fp}" < /dev/stdin',
+            f'cat > "{remote_script_fp}"',
             f'chmod 755 "{remote_script_fp}"',
             f"echo {EXEC_PREFIX}=$?",
         ]
