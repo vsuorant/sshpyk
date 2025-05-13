@@ -311,7 +311,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     ):
         self.ld("Waiting to write remote script")
         cmd_str = " ".join(cmd)
-        self.ld(f"{cmd_str = !r}")
+        self.ld(f"{cmd_str = }")
         self.rem_exec_ok = None  # reset
         try:
             future = self.extract_from_process_pipes(
@@ -327,7 +327,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             cmd = [self.ssh, self.ssh_host_alias]  # type: ignore
             msg = (
                 "Writing the remote SSHKernelApp script failed. "
-                f"Check your SSH connection ({' '.join(cmd)!r}) and "
+                f"Check your SSH connection ({' '.join(cmd)}) and "
                 "the remote user's file permissions manually."
             )
             self.le(msg)
@@ -349,7 +349,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.rem_ready = False  # reset
         self.ld("Waiting for remote connection file path from")
         cmd_str = " ".join(cmd)
-        self.ld(f"{cmd_str = !r}")
+        self.ld(f"{cmd_str = }")
         try:
             future = self.extract_from_process_pipes(
                 process=process,
@@ -370,7 +370,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if not self.rem_sys_name:
             cmd = [self.ssh, self.ssh_host_alias]  # type: ignore
             msg = (
-                f"Check your SSH connection manually with {' '.join(cmd)!r}. "
+                f"Check your SSH connection manually with '{' '.join(cmd)}'. "
                 "Could not extract remote system name."
             )
             self.le(msg)
@@ -447,11 +447,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 self.le(msg)
                 raise RuntimeError(msg)
         except json.JSONDecodeError as e:
-            msg = f"Failed to parse remote connection file {output!r}: {e}"
+            msg = f"Failed to parse remote connection file '{output}': {e}"
             self.le(msg)
             raise RuntimeError(msg) from e
         except ValueError as e:  # must come after JSONDecodeError
-            msg = f"Failed to parse remote kernel PID {output!r}: {e}"
+            msg = f"Failed to parse remote kernel PID '{output}': {e}"
             self.le(msg)
             raise RuntimeError(msg) from e
         except Exception as e:
@@ -459,7 +459,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 ec = f"{e.__class__.__name__}: "
             except Exception:
                 ec = ""
-            msg = f"Failed to fetch remote connection file: {ec}{e!r}"
+            msg = f"Failed to fetch remote connection file: {ec}'{e}'"
             self.le(msg)
             raise RuntimeError(msg) from e
 
@@ -552,7 +552,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.rem_proc_cmds: Dict[int, str] = {}  # Dict[pid, cmd]
 
         if self.existing and self.persistent_file:
-            msg = f"Specify only {self.existing = !r} or {self.persistent_file = !r}"
+            msg = f"Specify only {self.existing = } or {self.persistent_file = }"
             raise RuntimeError(msg)
 
         self.persistent = bool(self.persistent_file) or self.persistent
@@ -880,7 +880,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             *self.kernel_tunnels_args,  # ssh tunnels within the same command
             alias,
         ]
-        self.ld(f"Periodic kernel tunnels check cmd_str = {' '.join(cmd)!r}")
+        self.ld(f"Periodic kernel tunnels check cmd_str = '{' '.join(cmd)}'")
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=subprocess.PIPE,
@@ -923,7 +923,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             log_func(f"[Process {proc.pid}] {line}")
             if "control socket" in line.lower():
                 log_func = log_func if log_func == self.le else self.lw
-                log_func(f"'ssh -O forward ...' said {line!r}. " + msg_warn)
+                log_func(f"'ssh -O forward ...' said '{line}'. " + msg_warn)
 
         log_func(msg)
 
@@ -1201,7 +1201,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 if not is_zombie(processes[pid]["state"]):
                     self.lw(
                         f"Command mismatch RPID={pid} ({attr}). "
-                        f"Expected {expected_cmd!r}, got {cmd!r}"
+                        f"Expected '{expected_cmd}', got '{cmd}'"
                     )
                 self.ld(f"RPID={pid} cleared ({attr}) {processes[pid] = }")
                 setattr(self, attr, None)  # reset
@@ -1247,8 +1247,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # 255 happens for example when ssh gets a `Network is unreachable`
             if proc.returncode not in (0, 1, 255):
                 self.lw(
-                    f"Unexpected return code {proc.returncode} from {cmd!r}. "
-                    f"Output: {output!r}"
+                    f"Unexpected return code {proc.returncode} from '{' '.join(cmd)}'. "
+                    f"Output: '{output}'"
                 )
 
             if proc.returncode not in (0, 1):
@@ -1272,7 +1272,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 ec = f"{e.__class__.__name__}: "
             except Exception:
                 ec = ""
-            self.le(f"Failed to fetch remote processes state {cmd!r}: {ec}{e}")
+            self.le(f"Failed to fetch remote processes state '{cmd}': {ec}{e}")
             return False, {}
 
     async def fetch_remote_processes_info(self, pids: List[int]) -> T_PROC_INFO:
@@ -1454,14 +1454,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             if proc.returncode == 1:
                 self.ld(
                     f"Signal {signum} sent to remote process, RPID={pid}, "
-                    f"but process not found ({output!r})"
+                    f"but process not found ('{output}')"
                 )
                 self.clear_remote_pids([pid], {})
                 return RProcResult.PROCESS_NOT_FOUND
             elif proc.returncode != 0:
                 self.le(
                     f"Failed to send signal {signum} to remote process, RPID={pid}, "
-                    f"{proc.returncode = }: {output!r}"
+                    f"{proc.returncode = }: '{output}'"
                 )
                 return RProcResult.SIGNAL_FAILED
             return RProcResult.OK
