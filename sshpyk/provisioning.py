@@ -855,6 +855,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # ##############################################################################
         # # After picking the ports, open tunnels ASAP to minimize the chance of a race
         # # condition on local ports (from other processes on the local machine)
+        alias = self.ssh_host_alias
         if not self.restart_requested:
             self.pick_kernel_local_ports()
         await self.make_kernel_tunnels_args()  # closes old tunnels if needed
@@ -865,9 +866,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             "-O",  # mute ssh output
             "forward",  # do nothing, i.e. maintain the tunnels alive
             *self.kernel_tunnels_args,  # ssh tunnels within the same command
-            self.ssh_host_alias,
+            alias,
         ]
-        self.ld(f"Ensuring kernel tunnels cmd_str = {' '.join(cmd)!r}")
+        self.ld(f"Periodic kernel tunnels check cmd_str = {' '.join(cmd)!r}")
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=subprocess.PIPE,
@@ -884,7 +885,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
         msg = (
             f"Try again after making sure you have `ControlMaster=auto` in "
-            f"under your dedicated `Host {self.ssh_host_alias}` in your ssh config "
+            f"under your dedicated `Host {alias}` in your ssh config "
             f"file (usually `$HOME/.ssh/config`)."
         )
         # The `ssh -O forward` command is expected to exit cleanly (code 0)
@@ -896,14 +897,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
             log_func = self.le
         else:
-            msg = f"Tunnels to {self.ssh_host_alias} for kernel ports opened"
+            msg = f"Tunnels to host {alias!r} for kernel ports seem opened"
             log_func = self.ld
 
         msg_warn = (
             "You might have lost the control socket (e.g. WiFi disconnected). "
-            f"Make sure {self.ssh_host_alias} is reachable. If you had run "
-            f"`ssh -M -f -N {self.ssh_host_alias}` "
-            f"to input the login password for {self.ssh_host_alias} "
+            f"Make sure {alias!r} is reachable. If you had run "
+            f"`ssh -M -f -N {alias}` "
+            f"to input the login password for {alias!r} "
             "before starting the kernel, you have to manually run it again."
         )
         for line in lines:
