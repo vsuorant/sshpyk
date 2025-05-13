@@ -86,7 +86,7 @@ def get_local_ssh_configs(
     alias: str,
     log: logging.Logger = logger,
     lp: str = "",
-):
+) -> List[Dict[str, Union[str, List[str]]]]:
     aliases = [alias]
     hosts_configs = []
     while aliases:
@@ -111,26 +111,135 @@ def get_local_ssh_configs(
         proxy_jump = config.get("proxyjump", None)
         if proxy_jump:
             if isinstance(proxy_jump, list):
-                # TODO move into a verify function
                 log.warning(
                     f"{lp}SSH reports more than one ProxyJump for {alias!r}: "
-                    "{proxy_jump!r}. This is likely an SSH misconfiguration!"
+                    "{proxy_jump!r}. This is likely a misconfiguration!"
                 )
                 # ? is this SSH config possible/valid at all?
                 aliases.append(proxy_jump[0])
             else:
                 aliases.append(proxy_jump)
-        proxy_cmd = config.get("proxycommand", None)
-        if proxy_cmd:
-            # TODO move into a verify function
-            log.warning(
-                f"{lp}SSH host alias {alias!r} uses a ProxyCommand '{proxy_cmd}'. "
-                "It is recommended to use ProxyJump instead. "
-                "Your configuration might not work as expected."
-            )
         hosts_configs.append(config)
     log.debug(f"{lp}Read {len(hosts_configs)} local SSH configs")
     return hosts_configs
+
+
+def validate_ssh_config(
+    config: Dict[str, Union[str, List[str]]],
+    log: logging.Logger = logger,
+    lp: str = "",
+):
+    out = {}
+    keys = [
+        "hostname",
+        "user",
+        "identityfile",
+        "controlmaster",
+        "controlpersist",
+        "controlpath",
+        "proxyjump",
+        "proxycommand",
+    ]
+    for key in tuple(keys):
+        if isinstance(config.get(key, None), list):
+            out[key] = (
+                "error",
+                f"Likely missing in your ssh config. Multiple values: {config[key]}.",
+            )
+            del keys[keys.index(key)]
+
+    if "user" in keys:
+        if "user" not in config:
+            out["user"] = ("error", "Missing, must be set in the ssh config.")
+        else:
+            out["user"] = ("info", config["user"])
+
+    if "hostname" in keys:
+        host = config.get("host", None)
+        if host:
+            hostname = config.get("hostname", None)
+            if host != hostname:
+                out["hostname"] = ("info", host)
+            else:
+                out["hostname"] = (
+                    "error",
+                    "Likely missing in your ssh config. "
+                    f"{host=!r} and {hostname=!r} must be different.",
+                )
+        else:
+            out["hostname"] = ("error", "Missing, must be set in the ssh config.")
+
+    if "identityfile" in keys:
+        id_file = config.get("identityfile", None)
+        if id_file:
+            fp = Path(id_file).resolve()  # type: ignore
+            if fp.exists():
+                out["identityfile"] = ("ok", str(fp))
+            else:
+                out["identityfile"] = (
+                    "error",
+                    f"'{fp}' does not exist. Make sure the private key file exists!",
+                )
+        else:
+            out["identityfile"] = (
+                "warning",
+                "Missing, it is recommended to use private key authentication.",
+            )
+
+    if "controlmaster" in keys:
+        cm = config.get("controlmaster", None)
+        if cm:
+            if cm == "auto":
+                out["controlmaster"] = ("ok", "auto")
+            else:
+                out["controlmaster"] = (
+                    "error",
+                    f"Must be 'auto', not {cm!r}.",
+                )
+        else:
+            out["controlmaster"] = ("error", "Missing, must be 'auto'.")
+
+    if "controlpersist" in keys:
+        c_persist = config.get("controlpersist", None)
+        if c_persist:
+            if c_persist not in ("no", "false"):
+                out["controlpersist"] = ("ok", c_persist)
+            else:
+                out["controlpersist"] = (
+                    "error",
+                    f"Must be, e.g., '10m' or 'yes', not {c_persist!r}.",
+                )
+        else:
+            out["controlpersist"] = ("error", "Missing, recommended '10m' (or larger).")
+
+    if "controlpath" in keys:
+        c_path = config.get("controlpath", None)
+        recommended = "~/.ssh/sshpyk_%r@%h_%p"
+        if c_path:
+            dp = Path(c_path).resolve().parent  # type: ignore
+            if dp.exists():
+                out["controlpath"] = ("ok", c_path)
+            else:
+                out["controlpath"] = (
+                    "error",
+                    f"Parent dir '{dp}' does not exist! Parent dir must exist!",
+                )
+        else:
+            out["controlpath"] = ("error", f"Missing, use, e.g., {recommended!r}.")
+
+    proxy_cmd = config.get("proxycommand", None)
+    if "proxycommand" in keys and proxy_cmd:
+        out["proxycommand"] = (
+            "warning",
+            f"ProxyCommand: {proxy_cmd}, use ProxyJump instead.",
+        )
+
+    if "proxyjump" in keys:
+        proxy_jump = config.get("proxyjump", None)
+        if proxy_jump:
+            out["proxyjump"] = ("info", proxy_jump)  # nothing we can check about this
+
+    return out
 
 
 def verify_ssh_connection(

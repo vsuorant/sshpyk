@@ -13,6 +13,8 @@ from .utils import (
     LAUNCH_TIMEOUT,
     SHUTDOWN_TIME,
     fetch_remote_kernel_specs,
+    get_local_ssh_configs,
+    validate_ssh_config,
     verify_local_ssh,
     verify_rem_executable,
     verify_ssh_connection,
@@ -32,7 +34,10 @@ G = "\033[32m"  # Green
 R = "\033[31m"  # Red
 C = "\033[36m"  # Cyan
 M = "\033[35m"  # Magenta
+E = "\033[90m"  # Grey
+W = "\033[33m"  # Orange
 N = "\033[39m"  # Reset color only, not formatting
+
 
 K_NAME = "Name:"
 K_DISP = "Display Name:"
@@ -42,6 +47,7 @@ K_CMD = "Command:"
 K_CMDS = "Command (simplified):"
 K_LANG = "Language:"
 K_SSH = "SSH Host Alias:"
+K_CONN = "SSH Connection:"
 K_SSH_PATH = "SSH Path:"
 K_EXE = "Remote Python:"
 K_RKER = "Remote Kernel Name:"
@@ -227,16 +233,26 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         "uname": None,
         "interrupt_mode_ok": kernel.get("interrupt_mode") == "message",
         "interrupt_mode_remote": None,
+        "ssh_configs_val": None,
     }
+    try:
+        ssh_bin = verify_local_ssh(kernel.get("ssh", None), name="ssh")
+        results["ssh_path"] = ssh_bin
+        results["ssh_exec_ok"] = ssh_bin is not None
+    except Exception as e:
+        results["ssh_exec_ok"] = False
+        logger.error(f"Error verifying local ssh: {e}")
+
+    if ssh_bin:
+        configs = get_local_ssh_configs(ssh_bin, kernel["host"])
+        results["ssh_configs_val"] = {
+            config["host"]: validate_ssh_config(config) for config in configs
+        }
 
     if skip_checks:
         return results
 
     try:
-        ssh_bin = verify_local_ssh(kernel.get("ssh", None), name="ssh")
-        results["ssh_path"] = ssh_bin
-        results["ssh_exec_ok"] = ssh_bin is not None
-
         ssh_ok, _, uname = verify_ssh_connection(ssh_bin, kernel["host"])
         if not ssh_ok:
             results["ssh_ok"] = False
@@ -312,10 +328,22 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
     # "message" in the kernel spec.
     c = format_check(check_res["interrupt_mode_ok"])
     k_lines.append(f"{C}{K_INT:<{K_LEN}}{N} {c} {kernel['interrupt_mode']}")
-    c = format_check(check_res["ssh_ok"])
-    k_lines.append(f"{C}{K_SSH:<{K_LEN}}{N} {c} {kernel['host']}")
+
     c = format_check(check_res["ssh_exec_ok"])
     k_lines.append(f"{C}{K_SSH_PATH:<{K_LEN}}{N} {c} {check_res['ssh_path']}")
+
+    host_prefix = ""
+    for host, val in check_res["ssh_configs_val"].items():
+        k_lines.append(f"{C}{K_SSH:<{K_LEN}}{N} {host}{host_prefix}")
+        for k, (status, msg) in val.items():
+            c = format_check(status)
+            offset = "  "
+            k_lines.append(f"{C}{'':<{K_LEN}}{N} {offset} {c} {k}: {msg}")
+        host_prefix = " (jump)"
+
+    c = format_check(check_res["ssh_ok"])
+    k_lines.append(f"{C}{K_CONN:<{K_LEN}}{N} {c} {kernel['host']}")
+
     if check_res["uname"]:
         k_lines.append(f"{C}{K_RUNAME:<{K_LEN}}{N} {check_res['uname']}")
     if check_res["interrupt_mode_remote"]:
@@ -332,15 +360,21 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
 
 def format_check(check_status):
     """Format a check result with appropriate color based on boolean status."""
-    if check_status is False:
+    if check_status in (False, "error"):
         check_symbol = "(x)"
         color = R
-    elif check_status is True:
+    elif check_status in (True, "ok"):
         check_symbol = "(v)"
         color = G
+    elif check_status == "info":
+        check_symbol = "(i)"
+        color = N
+    elif check_status == "warning":
+        check_symbol = "(!)"
+        color = W
     else:  # For None case
         check_symbol = "(?)"
-        color = C
+        color = E
 
     return f"{color}{check_symbol}{N}"
 

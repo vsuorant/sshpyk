@@ -254,8 +254,9 @@ class SSHKernelApp(JupyterApp):
         p = getattr(self.km, "provisioner", None)
         if p and hasattr(p, "persistent"):
             # SSHKernelProvisioner checks this flag before deleting persistent_file
-            self.log.info(f"Setting {persistent = } (previous {p.persistent = })")
-            p.persistent = persistent
+            if p.persistent != persistent:
+                self.log.info(f"Setting {persistent = } (previous {p.persistent = })")
+                p.persistent = persistent
 
     def leave_app(self, signo: int) -> None:
         """Leave the application without shutting down the kernel."""

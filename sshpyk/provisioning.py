@@ -27,6 +27,7 @@ from .utils import (
     UNAME_PREFIX,
     find_persistent_file,
     get_local_ssh_configs,
+    validate_ssh_config,
     verify_local_ssh,
 )
 
@@ -580,14 +581,23 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ld(f"{self.persistent_file = }")
         self.ld(f"{self.existing = }, {self.persistent = }, {self.persistent_file = }")
 
-        # Auto-detect SSH executable if not specified, verify by calling it
         self.ssh = verify_local_ssh(
             self.ssh, log=self.log, name="ssh", lp=self.log_prefix
         )
-        # TODO
-        _ = get_local_ssh_configs(
+        configs = get_local_ssh_configs(
             self.ssh, alias=self.ssh_host_alias, log=self.log, lp=self.log_prefix
         )
+        for config in configs:
+            valid = validate_ssh_config(config, log=self.log, lp=self.log_prefix)
+            host = config.get("host", None)
+            for k, v in valid.items():
+                self.li(f"{self.log_prefix}[Local ssh config for '{host}'] {k}: {v}")
+            for k, (v, msg) in valid.items():
+                if v == "error":
+                    raise RuntimeError(
+                        f"Invalid config for ssh host alias {host!r}: ({v}) {k}: {msg} "
+                        "Verify your local ssh config (e.g., ~/.ssh/config)."
+                    )
 
         if self.parent is None:
             raise RuntimeError("Parent KernelManager not set")
