@@ -50,6 +50,8 @@ REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
 RGX_KERNEL_NAME = re.compile(r"^[a-z0-9._-]+$", re.IGNORECASE)
 RGX_SSH_HOST_ALIAS = re.compile(r"^[a-z0-9_-]+$", re.IGNORECASE)
 
+RGX_SSH_LOGS = re.compile(r"^debug\d+: ")
+
 KERNELAPP_PY = (Path(__file__).parent / "kernelapp.py").read_bytes()
 KA_VERSION = hashlib.sha256(KERNELAPP_PY).hexdigest()[:8]  # 4 bytes = 8 hex chars
 KERNELAPP_PY = KERNELAPP_PY.decode()
@@ -249,6 +251,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 if not line:
                     continue
                 self.ld(f"[Process {process.pid}] stdout/stderr: {line}")
+                # When enabling --ssh-verbose=vvv it can mess up the extraction
+                # because sometimes it prints the commands it is executing on the
+                # remote
+                if RGX_SSH_LOGS.match(line):
+                    continue
                 for i, line_handler in enumerate(line_handlers):
                     if i in handlers_done:
                         continue
