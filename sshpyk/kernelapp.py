@@ -15,6 +15,7 @@ from jupyter_core.application import JupyterApp, base_flags
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.iostream import StreamClosedError
 from traitlets import Bool, Integer, Unicode
+from traitlets import Enum as EnumTrait
 from traitlets.config.loader import Config
 
 LEAVE_HELP = """
@@ -46,6 +47,13 @@ PERSISTENT_FILE = dict(
     "If not provided, but `--persistent` flag is passed, the file will be preserved. "
     "If provided, the file will be preserved and `--persistent` is overridden to True.",
 )
+SSH_VERBOSE = dict(
+    config=True,
+    help="Increases verbosity of the SSH connection.",
+    default_value=None,
+    allow_none=True,
+    values=("v", "vv", "vvv"),
+)
 
 
 class SSHKernelApp(JupyterApp):
@@ -61,6 +69,7 @@ class SSHKernelApp(JupyterApp):
         ("existing", "e"): "SSHKernelApp.existing",
         ("persistent_file", "f"): "SSHKernelApp.persistent_file",
         ("poll-interval", "i"): "SSHKernelApp.poll_interval",
+        "ssh-verbose": "SSHKernelApp.ssh_verbose",
     }
 
     flags = {
@@ -94,6 +103,7 @@ class SSHKernelApp(JupyterApp):
     existing = Unicode(**EXISTING)  # type: ignore
     persistent = Bool(**PERSISTENT)  # type: ignore
     persistent_file = Unicode(**PERSISTENT_FILE)  # type: ignore
+    ssh_verbose = EnumTrait(**SSH_VERBOSE)  # type: ignore
 
     def initialize(self, argv: Union[str, Sequence[str], None] = None) -> None:
         """Initialize the application."""
@@ -108,7 +118,7 @@ class SSHKernelApp(JupyterApp):
         if p_name not in self.config:
             self.config[p_name] = Config()
         pc = self.config[p_name]
-        for k in ("existing", "persistent", "persistent_file"):
+        for k in ("existing", "persistent", "persistent_file", "ssh_verbose"):
             if getattr(self, k):
                 v = getattr(self, k)
                 if k in pc:

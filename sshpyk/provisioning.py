@@ -17,8 +17,9 @@ from jupyter_client.provisioning.provisioner_base import KernelProvisionerBase
 from jupyter_client.session import new_id_bytes
 from jupyter_core.paths import jupyter_runtime_dir, secure_write
 from traitlets import Bool, Integer, Unicode
+from traitlets import Enum as EnumTrait
 
-from .kernelapp import EXISTING, PERSISTENT, PERSISTENT_FILE
+from .kernelapp import EXISTING, PERSISTENT, PERSISTENT_FILE, SSH_VERBOSE
 from .utils import (
     LAUNCH_TIMEOUT,
     RGX_UNAME_PREFIX,
@@ -162,6 +163,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         allow_none=True,
         default_value=None,
     )
+    ssh_verbose = EnumTrait(**SSH_VERBOSE)  # type: ignore
     independent_local_processes = Bool(
         config=True,
         help="If True, all the local subprocesses are spawned with "
@@ -188,6 +190,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     restart_requested = False
     log_prefix = ""
+
+    ssh_base = []
 
     _fetch_remote_processes_lock = None
     _poll_lock = None
@@ -326,7 +330,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise RuntimeError(msg) from e
 
         if not self.rem_exec_ok:
-            cmd = [self.ssh, self.ssh_host_alias]  # type: ignore
+            cmd = [*self.ssh_base, self.ssh_host_alias]  # type: ignore
             msg = (
                 "Writing the remote SSHKernelApp script failed. "
                 f"Check your SSH connection ({' '.join(cmd)}) and "
@@ -370,7 +374,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise RuntimeError(msg) from e
 
         if not self.rem_sys_name:
-            cmd = [self.ssh, self.ssh_host_alias]  # type: ignore
+            cmd = [*self.ssh_base, self.ssh_host_alias]  # type: ignore
             msg = (
                 f"Check your SSH connection manually with '{' '.join(cmd)}'. "
                 "Could not extract remote system name."
@@ -405,7 +409,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # For details on the way the processes are spawned see the Popen call in
             # pre_launch().
             cmd = [
-                self.ssh,
+                *self.ssh_base,
                 self.ssh_host_alias,
                 f"echo {PID_PREFIX_KERNEL}=$(pgrep -P {self.rem_pid_ka}); "
                 # print the connection file on a single line prefixed with a string
@@ -584,6 +588,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.ssh = verify_local_ssh(
             self.ssh, log=self.log, name="ssh", lp=self.log_prefix
         )
+        if self.ssh_verbose:
+            arg = f"-{self.ssh_verbose}"
+            self.ld(f"SSH verbose level: {arg}")
+            self.ssh_base = [self.ssh, arg]
+        else:
+            self.ssh_base = [self.ssh]
+
         configs = get_local_ssh_configs(
             self.ssh, alias=self.ssh_host_alias, log=self.log, lp=self.log_prefix
         )
@@ -625,7 +636,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             f"echo {EXEC_PREFIX}=$?",
         ]
         self.ld(f"Remote command {cmd = }")
-        cmd = [self.ssh, self.ssh_host_alias, "; ".join(cmd)]
+        cmd = [*self.ssh_base, self.ssh_host_alias, "; ".join(cmd)]
         self.ld(f"Local command {cmd = }")
         process = subprocess.Popen(  # noqa: S603
             cmd,
@@ -809,7 +820,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         cmd = "; ".join(cmd_parts)
         self.ld(f"Remote command {cmd = }")
         cmd = [
-            self.ssh,
+            *self.ssh_base,
             # "-t",  # ! We don't need a pseudo-tty to be allocated
             self.ssh_host_alias,
             cmd,
@@ -891,7 +902,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if not self.kernel_tunnels_args:
             raise RuntimeError(f"Unexpected {self.kernel_tunnels_args = }")
         cmd = [
-            self.ssh,
+            *self.ssh_base,
             "-O",  # mute ssh output
             "forward",  # do nothing, i.e. maintain the tunnels alive
             *self.kernel_tunnels_args,  # ssh tunnels within the same command
@@ -946,7 +957,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     async def close_tunnels(self, tunnels_args: List[str]):
         cmd = [
-            self.ssh,
+            *self.ssh_base,
             "-O",  # mute ssh output
             "cancel",  # do nothing, i.e. maintain the tunnels alive
             *tunnels_args,  # ssh tunnels within the same command
@@ -1237,7 +1248,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         else:  # assume unix
             comm = "args"  # ? does this displays the full command on unix?
         cmd = [
-            self.ssh,
+            *self.ssh_base,
             self.ssh_host_alias,
             # print the output of ps prefixed with a string so that we can ignore all
             # the output before that
@@ -1457,7 +1468,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if signum not in (SIGINT, SIGTERM, SIGKILL):
             raise ValueError(f"Invalid signal number {signum}")
         try:
-            cmd = [self.ssh, self.ssh_host_alias, f"kill -{signum} {pid}"]
+            cmd = [*self.ssh_base, self.ssh_host_alias, f"kill -{signum} {pid}"]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
