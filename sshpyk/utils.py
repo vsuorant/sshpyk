@@ -3,8 +3,8 @@ import logging
 import re
 from pathlib import Path
 from shutil import which
-from subprocess import run
-from typing import List, Optional, Tuple, Union
+from subprocess import PIPE, STDOUT, run
+from typing import Dict, List, Optional, Tuple, Union
 
 from jupyter_client.connect import find_connection_file
 
@@ -38,26 +38,99 @@ def verify_local_ssh(
     if not ssh:
         ssh = which(name)
         if not ssh:
-            log.warning(f"{lp}Local {name!r} executable not found.")
+            log.warning(f"{lp}Local {name} executable not found.")
         else:
-            log.info(f"{lp}Auto-detected {name!r} executable: {ssh}")
+            log.info(f"{lp}Auto-detected {name} executable: {ssh}")
     if not ssh:
-        raise EnvironmentError(f"{lp}Local '{name!r}' executable not found.")
+        raise EnvironmentError(f"{lp}Local {name} executable not found.")
     cmd = [ssh, "-V"]
-    log.debug(f"{lp}Verifying local {name!r} {cmd = }")
+    log.debug(f"{lp}Verifying local {name} {cmd = }")
     ret = run(  # noqa: S603
         cmd,
-        capture_output=True,
+        stdout=PIPE,
+        stderr=STDOUT,  # at least OpenSSH outputs version to stderr
         text=True,
         check=False,
     )  # type: ignore
     ok = ret.returncode == 0
+    out = ret.stdout.strip()
     if not ok:
-        msg = f"{lp}Local {name!r} verification failed"
+        msg = f"{lp}Local {name} verification failed: {out!r}"
         log.error(msg)
         raise EnvironmentError(msg)
-    log.debug(f"{lp}Local {name!r} verification succeeded")
+    log.debug(f"{lp}Local {name} verification succeeded, {name} version: {out}")
     return ssh
+
+
+def parse_ssh_config(config: str):
+    lines = (line.strip() for line in config.strip().splitlines())
+    tuples = (line.split(" ", 1) for line in lines if " " in line)
+    # .lower() just in case, SSH already prints in lowercase
+    configs = ((key.strip().lower(), value.strip()) for key, value in tuples)
+
+    out: Dict[str, Union[str, List[str]]] = {}
+    # ! there can be multiple entries for the same config key, e.g. IdentityFile
+    for key, value in configs:
+        if key in out:
+            if isinstance(out[key], list):
+                out[key].append(value)  # type: ignore
+            else:
+                out[key] = [out[key], value]  # type: ignore
+        else:
+            out[key] = value
+    return out
+
+
+def get_local_ssh_configs(
+    ssh: str,
+    alias: str,
+    log: logging.Logger = logger,
+    lp: str = "",
+):
+    aliases = [alias]
+    hosts_configs = []
+    while aliases:
+        alias = aliases.pop(0)
+        # ! for non-defined aliases, it will still dump a config based on defaults
+        cmd = [ssh, "-G", alias]  # dumps all configs for the alias
+        log.debug(f"{lp}Reading local SSH config for {alias!r}: {cmd = }")
+        ret = run(  # noqa: S603
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )  # type: ignore
+        ok = ret.returncode == 0
+        if not ok:
+            stderr = ret.stderr.strip()
+            msg = f"{lp}Reading local SSH config for {alias!r} failed: {stderr!r}"
+            log.error(msg)
+            raise EnvironmentError(msg)
+        config = parse_ssh_config(ret.stdout)
+        log.debug(f"{lp}Local SSH config for host alias {alias!r}: {config}")
+        proxy_jump = config.get("proxyjump", None)
+        if proxy_jump:
+            if isinstance(proxy_jump, list):
+                # TODO move into a verify function
+                log.warning(
+                    f"{lp}SSH reports more than one ProxyJump for {alias!r}: "
+                    "{proxy_jump!r}. This is likely an SSH misconfiguration!"
+                )
+                # ? is this SSH config possible/valid at all?
+                aliases.append(proxy_jump[0])
+            else:
+                aliases.append(proxy_jump)
+        proxy_cmd = config.get("proxycommand", None)
+        if proxy_cmd:
+            # TODO move into a verify function
+            log.warning(
+                f"{lp}SSH host alias {alias!r} uses a ProxyCommand '{proxy_cmd}'. "
+                "It is recommended to use ProxyJump instead. "
+                "Your configuration might not work as expected."
+            )
+        hosts_configs.append(config)
+    log.debug(f"{lp}Read {len(hosts_configs)} local SSH configs")
+    return hosts_configs
 
 
 def verify_ssh_connection(

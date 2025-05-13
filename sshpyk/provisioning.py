@@ -26,6 +26,7 @@ from .utils import (
     SSHPYK_PERSISTENT_FP_BASE,
     UNAME_PREFIX,
     find_persistent_file,
+    get_local_ssh_configs,
     verify_local_ssh,
 )
 
@@ -580,7 +581,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.ld(f"{self.existing = }, {self.persistent = }, {self.persistent_file = }")
 
         # Auto-detect SSH executable if not specified, verify by calling it
-        self.ssh = verify_local_ssh(self.ssh, self.log, "ssh", self.log_prefix)
+        self.ssh = verify_local_ssh(
+            self.ssh, log=self.log, name="ssh", lp=self.log_prefix
+        )
+        # TODO
+        _ = get_local_ssh_configs(
+            self.ssh, alias=self.ssh_host_alias, log=self.log, lp=self.log_prefix
+        )
 
         if self.parent is None:
             raise RuntimeError("Parent KernelManager not set")
