@@ -159,7 +159,7 @@ def validate_ssh_config(
         if host:
             hostname = config.get("hostname", None)
             if host != hostname:
-                out["hostname"] = ("info", host)
+                out["hostname"] = ("info", hostname)
             else:
                 out["hostname"] = (
                     "error",
@@ -231,7 +231,8 @@ def validate_ssh_config(
     if "proxycommand" in keys and proxy_cmd:
         out["proxycommand"] = (
             "warning",
-            f"ProxyCommand: {proxy_cmd}, use ProxyJump instead.",
+            f"ProxyCommand: {proxy_cmd!r}. "
+            "Use ProxyJump instead if reaching this host requires a Bastion host!",
         )
 
     if "proxyjump" in keys:
