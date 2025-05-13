@@ -414,7 +414,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 f"echo {PID_PREFIX_KERNEL}=$(pgrep -P {self.rem_pid_ka}); "
                 # print the connection file on a single line prefixed with a string
                 # so that we can parse it later
-                + f"echo -n {CONN_INFO_PREFIX}=; "
+                # ! `echo -n` is not supported on all systems, use `printf` instead.
+                + f"printf '{CONN_INFO_PREFIX}='; "
                 # `r` string is raw string so that python does not interpret the `\`
                 + rf'cat "{self.rem_conn_fp}" | tr -d "\n" && echo ""',
             ]

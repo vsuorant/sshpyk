@@ -249,7 +249,7 @@ def verify_ssh_connection(
     lp: str = "",
 ) -> Tuple[bool, str, str]:
     """Verify that the SSH connection to the remote host is working."""
-    cmd = [ssh, "-q", host_alias, f"echo -n '{UNAME_PREFIX}=' && uname -a"]
+    cmd = [ssh, "-q", host_alias, f"echo '{UNAME_PREFIX}=$(uname -a)'"]
     log.debug(f"{lp}Verifying SSH connection to {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
@@ -320,7 +320,8 @@ def fetch_remote_kernel_specs(
     cmd = [
         ssh,
         host_alias,
-        f"echo -n '{GET_SPECS_PREFIX}=' && {python} -c '{GET_ALL_SPECS_PY}'",
+        # ! `echo -n` is not supported on all systems, use `printf` instead.
+        f"printf '{GET_SPECS_PREFIX}=' && {python} -c '{GET_ALL_SPECS_PY}'",
     ]
     log.debug(f"{lp}Fetching remote kernel specs from {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
