@@ -309,6 +309,36 @@ def verify_rem_executable(
     return ok, msg
 
 
+def verify_rem_dir_exists(
+    ssh: str,
+    host_alias: str,
+    dir_path: str,
+    log: logging.Logger = logger,
+    lp: str = "",
+) -> Tuple[bool, str]:
+    """Verify that the remote directory exists."""
+    # NB the quotes around dir_path are mandatory and safer
+    cmd = [ssh, host_alias, f'test -d "{dir_path}"']
+    log.debug(
+        f"{lp}Verifying remote directory {dir_path!r} on {host_alias!r}: {cmd = }"
+    )
+    ret = run(  # noqa: S603
+        cmd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )  # type: ignore
+    ok = ret.returncode == 0
+    if not ok:
+        msg = f"{lp}Remote directory {dir_path!r} does not exist or is not a directory."
+        # Don't log as error, it might be an expected non-existent default path
+        log.debug(msg)
+    else:
+        msg = f"{lp}Remote directory {dir_path!r} exists."
+        log.debug(msg)
+    return ok, msg
+
+
 def fetch_remote_kernel_specs(
     ssh: str,
     host_alias: str,
