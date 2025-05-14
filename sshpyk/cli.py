@@ -13,13 +13,10 @@ from .utils import (
     DEFAULT_REMOTE_SCRIPT_DIR,
     LAUNCH_TIMEOUT,
     SHUTDOWN_TIME,
-    fetch_remote_kernel_specs,
     get_local_ssh_configs,
+    remote_checks,
     validate_ssh_config,
     verify_local_ssh,
-    verify_rem_dir_exists,
-    verify_rem_executable,
-    verify_ssh_connection,
 )
 
 try:
@@ -248,81 +245,128 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
     except Exception as e:
         results["ssh_exec_ok"] = False
         logger.error(f"Error verifying local ssh: {e}")
+        results["ssh_ok"] = False
+        return results
 
     if ssh_bin:
         configs = get_local_ssh_configs(ssh_bin, kernel["host"])
         results["ssh_configs_val"] = {
             config["host"]: validate_ssh_config(config) for config in configs
         }
+    else:  # Should be caught by ssh_exec_ok = False from try-except block
+        logger.warning(
+            f"Local SSH not usable for kernel '{kernel['name']}' on host "
+            f"'{kernel['host']}', skipping remote checks."
+        )
+        results["ssh_ok"] = False  # Mark connection as not OK
+        return results
 
     if skip_checks:
         return results
 
+    # If local SSH executable is not okay, we can't perform remote checks.
+    if not results.get("ssh_exec_ok"):
+        logger.warning(
+            f"Local SSH not usable for host {kernel['host']}, skipping remote checks."
+        )
+        results["ssh_ok"] = False
+        results["exec_ok"] = False
+        results["kernel_ok"] = False
+        results["rsd_ok"] = False
+        return results
+
     try:
-        ssh_ok, _, uname = verify_ssh_connection(ssh_bin, kernel["host"])
-        if not ssh_ok:
+        remote_python = kernel["remote_python"]
+        remote_script_dir = kernel["remote_script_dir"]
+        host_alias = kernel["host"]
+
+        # Use a cache key that represents this specific set of checks for this host
+        # to avoid redundant calls if multiple kernels share the same host and config.
+        cache_key = (host_alias, remote_python, remote_script_dir)
+
+        if cache_key in remote_specs_cache:
+            check_data = remote_specs_cache[cache_key]
+            logger.debug(f"Using cached remote checks for {host_alias}")
+        else:
+            logger.debug(f"Performing remote checks for {host_alias}")
+            check_data = remote_checks(
+                ssh_bin,
+                host_alias,
+                remote_python,
+                remote_script_dir,
+                log=logger,  # Pass logger for consistent logging
+                lp=f"[{kernel['name']}] ",  # Log prefix for context
+            )
+            remote_specs_cache[cache_key] = check_data
+
+        # Process the results from check_data
+        if check_data.get("err_msg") and not check_data.get("uname"):
+            # This indicates a significant failure in the SSH command itself
+            # or initial connection.
             results["ssh_ok"] = False
             return results
+
+        results["uname"] = check_data.get("uname")
+        results["ssh_ok"] = bool(results["uname"])
+
+        if not results["ssh_ok"]:
+            logger.debug(
+                f"SSH connection to {host_alias} failed. "
+                f"Error: '{check_data.get('err_msg', '')}'. "
+            )
+            # If basic SSH connectivity (indicated by uname) failed, reset
+            results["exec_ok"] = None
+            results["kernel_ok"] = None
+            results["rsd_ok"] = None
+            return results
+
+        results["exec_ok"] = check_data.get("python_exec_ok")
+        results["rsd_ok"] = check_data.get("script_dir_ok")
+
+        remote_specs = check_data.get("remote_specs", {})
+
+        if kernel["remote_kernel_name"] in remote_specs:
+            results["kernel_ok"] = True
+            rkn = kernel["remote_kernel_name"]
+            remote_kernel_spec = remote_specs.get(rkn, {}).get("spec", {})
+            remote_argv = remote_kernel_spec.get("argv", [])
+            if remote_argv:
+                results["remote_cmd"] = " ".join(remote_argv)
+            r_interrupt_mode = remote_kernel_spec.get("interrupt_mode", "signal")
+            results["interrupt_mode_remote"] = r_interrupt_mode
         else:
-            results["uname"] = uname
+            results["kernel_ok"] = False
+            k_name = kernel["remote_kernel_name"]
+            log_msg_parts = [f"Remote kernel '{k_name}' not found on '{host_alias}'."]
+            if results["exec_ok"] is False:
+                log_msg_parts.append(
+                    f"Remote Python '{remote_python}' may not be executable or found."
+                )
+            elif not remote_specs and results["exec_ok"] is True:
+                # Python OK, but no specs.
+                log_msg_parts.append(
+                    f"Remote Python '{remote_python}' seems executable, "
+                    "but no kernel specs were returned. "
+                    "Ensure jupyter_client is installed and accessible by "
+                    "this Python interpreter."
+                )
+            elif remote_specs:  # Specs found, but not the target kernel
+                log_msg_parts.append(f"Available kernels: {list(remote_specs.keys())}.")
+            logger.warning(" ".join(log_msg_parts))
 
-        if ssh_ok:
-            results["ssh_ok"] = True
-
-            exec_ok, _ = verify_rem_executable(
-                ssh_bin,
-                kernel["host"],
-                kernel["remote_python"],
-            )
-            results["exec_ok"] = bool(exec_ok)
-
-            # Check remote script directory exists
-            rsd_ok, _ = verify_rem_dir_exists(
-                ssh_bin,
-                kernel["host"],
-                kernel["remote_script_dir"],
-            )
-            results["rsd_ok"] = bool(rsd_ok)
-
-            # Check remote kernel exists
-            remote_specs = get_remote_kernel_specs(
-                ssh_bin,
-                kernel["host"],
-                kernel["remote_python"],
-                remote_specs_cache,
-            )
-
-            if kernel["remote_kernel_name"] in remote_specs:
-                results["kernel_ok"] = True
-                # Get the remote kernel's argv
-                rkn = kernel["remote_kernel_name"]
-                remote_kernel_spec = remote_specs.get(rkn, {}).get("spec", {})
-                remote_argv = remote_kernel_spec.get("argv", [])
-                if remote_argv:
-                    results["remote_cmd"] = " ".join(remote_argv)
-                r_interrupt_mode = remote_kernel_spec.get("interrupt_mode", "signal")
-                results["interrupt_mode_remote"] = r_interrupt_mode
-            else:
-                results["kernel_ok"] = False
     except Exception as e:
-        logger.error(f"Error checking kernel {kernel['name']}: {e}")
+        logger.error(
+            f"Error during remote checks for kernel '{kernel['name']}' on "
+            f"'{kernel['host']}': {e}",
+            exc_info=True,
+        )
+        # Some results might be populated if error happened after it was cached
+        results["ssh_ok"] = False
+        results["exec_ok"] = None
+        results["kernel_ok"] = None
+        results["rsd_ok"] = None
 
     return results
-
-
-def get_remote_kernel_specs(ssh_bin, host, remote_python, remote_specs_cache):
-    """Get remote kernel specifications, using cache if available."""
-    if host not in remote_specs_cache:
-        try:
-            remote_specs_cache[host] = fetch_remote_kernel_specs(
-                ssh_bin,
-                host,
-                remote_python,
-            )
-        except Exception:
-            remote_specs_cache[host] = {}
-
-    return remote_specs_cache.get(host, {})
 
 
 def format_ssh_kernel_info(k_lines, kernel, check_res):
@@ -355,10 +399,10 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
             k_lines.append(f"{C}{'':<{K_LEN}}{N} {offset} {c} {k}: {msg}")
         host_prefix = " (jump)"
 
-    c = format_check(check_res["rsd_ok"])
-    k_lines.append(f"{C}{K_RSD:<{K_LEN}}{N} {c} {kernel['remote_script_dir']}")
     c = format_check(check_res["ssh_ok"])
     k_lines.append(f"{C}{K_CONN:<{K_LEN}}{N} {c} {kernel['host']}")
+    c = format_check(check_res["rsd_ok"])
+    k_lines.append(f"{C}{K_RSD:<{K_LEN}}{N} {c} {kernel['remote_script_dir']}")
 
     if check_res["uname"]:
         k_lines.append(f"{C}{K_RUNAME:<{K_LEN}}{N} {check_res['uname']}")

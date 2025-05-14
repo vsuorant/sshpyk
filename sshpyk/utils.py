@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from shutil import which
 from subprocess import PIPE, STDOUT, run
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jupyter_client.connect import find_connection_file
 
@@ -23,10 +23,14 @@ GET_ALL_SPECS_PY = inline_script(
 
 LAUNCH_TIMEOUT = 15
 SHUTDOWN_TIME = 15
-UNAME_PREFIX = "UNAME_INFO_RESULT"
+UNAME_PREFIX = "SSHPYK_UNAME_INFO"
 RGX_UNAME_PREFIX = re.compile(rf"{UNAME_PREFIX}=(.+)")
-GET_SPECS_PREFIX = "GET_SPECS_RESULT"
-RGX_GET_SPECS_PREFIX = re.compile(rf"{GET_SPECS_PREFIX}=(.+)")
+KERNEL_SPECS_PREFIX = "SSHPYK_KERNEL_SPECS"
+RGX_KERNEL_SPECS_PREFIX = re.compile(rf"{KERNEL_SPECS_PREFIX}=(.+)")
+REMOTE_PYTHON_EXEC_PREFIX = "SSHPYK_REMOTE_PYTHON_EXEC"
+RGX_REMOTE_PYTHON_EXEC_PREFIX = re.compile(rf"{REMOTE_PYTHON_EXEC_PREFIX}=(\d+)")
+REMOTE_SCRIPT_DIR_PREFIX = "SSHPYK_REMOTE_SCRIPT_DIR"
+RGX_REMOTE_SCRIPT_DIR_PREFIX = re.compile(rf"{REMOTE_SCRIPT_DIR_PREFIX}=(\d+)")
 
 SSHPYK_PERSISTENT_FP_BASE = "sshpyk-kernel"
 
@@ -260,10 +264,10 @@ def verify_ssh_connection(
         text=True,
         check=False,
     )  # type: ignore
-    raw_output = ret.stdout.strip()
+    stdout = ret.stdout.strip()
 
     uname = ""
-    for line in raw_output.splitlines():
+    for line in stdout.splitlines():
         if not line:
             continue
         match = RGX_UNAME_PREFIX.search(line)
@@ -273,7 +277,7 @@ def verify_ssh_connection(
 
     ok = ret.returncode == 0 and bool(uname)
     if not ok:
-        msg = f"{lp}SSH connection to {host_alias!r} failed: {raw_output = !r}"
+        msg = f"{lp}SSH connection to {host_alias!r} failed: {stdout = !r}"
         log.error(msg)
     else:
         msg = f"{lp}SSH connection to {host_alias!r} succeeded: {uname = !r}"
@@ -354,7 +358,7 @@ def fetch_remote_kernel_specs(
         ssh,
         host_alias,
         # ! `echo -n` is not supported on all systems, use `printf` instead.
-        f"printf '{GET_SPECS_PREFIX}=' && {python} -c '{GET_ALL_SPECS_PY}'",
+        f"printf '{KERNEL_SPECS_PREFIX}=' && {python} -c '{GET_ALL_SPECS_PY}'",
     ]
     log.debug(f"{lp}Fetching remote kernel specs from {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
@@ -367,13 +371,13 @@ def fetch_remote_kernel_specs(
         msg = f"{lp}Failed to fetch remote kernel specs: {ret.stderr.strip()!r}"
         log.error(msg)
         raise RuntimeError(msg)
-    raw_output = ret.stdout.strip()
-    lines = raw_output.splitlines()
+    stdout = ret.stdout.strip()
+    lines = stdout.splitlines()
     try:
         for line in lines:
             if not line:
                 continue
-            match = RGX_GET_SPECS_PREFIX.search(line)
+            match = RGX_KERNEL_SPECS_PREFIX.search(line)
             if match:
                 specs = json.loads(match.group(1))
                 break
@@ -399,3 +403,142 @@ def find_persistent_file(
     See the docstring of that function for details.
     """
     return find_connection_file(filename, path, profile)
+
+
+def remote_checks(
+    ssh_bin: str,
+    host_alias: str,
+    remote_python_path: str,
+    remote_script_dir: str,
+    log: logging.Logger = logger,
+    lp: str = "",
+) -> Dict[str, Any]:
+    """
+    Performs multiple checks on the remote host via a single SSH call.
+    Checks: uname, remote python executable, remote script directory, and kernel specs.
+    """
+    results: Dict[str, Any] = {
+        "uname": None,
+        "python_exec_ok": None,
+        "script_dir_ok": None,
+        "remote_specs": None,
+        "err_msg": None,
+        "stdout": None,
+    }
+    rpy_safe = f'"{remote_python_path}"'
+    commands = [
+        f'echo "{UNAME_PREFIX}=$(uname -a)"',
+        f"RPP={rpy_safe}",
+        'test -e "$RPP" && test -r "$RPP" && test -x "$RPP"',
+        f'echo "{REMOTE_PYTHON_EXEC_PREFIX}=$?"',
+        # Use the user-provided remote_script_dir directly, letting remote shell
+        # handle expansion
+        f'RSD="{remote_script_dir}"',
+        'test -d "$RSD"',
+        f'echo "{REMOTE_SCRIPT_DIR_PREFIX}=$?"',
+        # If remote_python_path is invalid, this command part will fail.
+        f"printf '{KERNEL_SPECS_PREFIX}=' && {rpy_safe} -c '{GET_ALL_SPECS_PY}'",
+    ]
+    # Using -q for ssh to suppress banners and diagnostic messages.
+    # Commands are joined by ';' to ensure all attempt to run.
+    cmd_str = "; ".join(commands)
+    cmd = [ssh_bin, "-vvv", host_alias, cmd_str]
+    log.debug(f"{lp}Performing remote checks on {host_alias!r} with {cmd_str = }")
+    try:
+        ret = run(  # noqa: S603
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,  # We parse output even if some commands fail
+            timeout=LAUNCH_TIMEOUT * 2,
+        )  # type: ignore
+    except Exception as e:
+        msg = f"{lp}Failed to execute remote checks command on {host_alias!r}: '{e}'"
+        log.error(msg)
+        results["err_msg"] = msg
+        return results
+
+    stdout = ret.stdout.strip()
+    stderr = ret.stderr.strip()
+    results["stdout"] = stdout
+
+    # Even if ret.returncode != 0, there might be partial results in stdout.
+    if ret.returncode != 0:
+        msg = (
+            f"{lp}SSH command for checks on {host_alias!r} exited "
+            f"with rc={ret.returncode}. "
+            f"stdout: '{stdout}'. "
+            f"stderr: '{stderr}'."
+        )
+        log.warning(msg)
+        # Store a general error message if one isn't more specifically set later.
+        if not results["err_msg"]:
+            results["err_msg"] = msg
+
+    for line in stderr.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        log.debug(f"{lp}(stderr) {line}")
+
+    parsed_specs = False
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        uname_match = RGX_UNAME_PREFIX.search(line)
+        if uname_match:
+            results["uname"] = uname_match.group(1).strip()
+            log.debug(f"{lp}Parsed uname: {results['uname']}")
+            continue
+
+        py_exec_match = RGX_REMOTE_PYTHON_EXEC_PREFIX.search(line)
+        if py_exec_match:
+            results["python_exec_ok"] = py_exec_match.group(1).strip() == "0"
+            log.debug(f"{lp}Parsed python_exec_ok: {results['python_exec_ok']}")
+            continue
+
+        script_dir_match = RGX_REMOTE_SCRIPT_DIR_PREFIX.search(line)
+        if script_dir_match:
+            results["script_dir_ok"] = script_dir_match.group(1).strip() == "0"
+            log.debug(f"{lp}Parsed script_dir_ok: {results['script_dir_ok']}")
+            continue
+
+        if not parsed_specs:
+            specs_match = RGX_KERNEL_SPECS_PREFIX.search(line)
+            if specs_match:
+                try:
+                    specs_json_str = specs_match.group(1).strip()
+                    results["remote_specs"] = json.loads(specs_json_str)
+                    num_specs = len(results["remote_specs"])
+                    log.debug(f"{lp}Parsed {num_specs} remote kernel specs.")
+                    parsed_specs = True
+                except json.JSONDecodeError as e:
+                    err_msg = (
+                        f"Failed to parse remote kernel specs JSON: '{e}'. "
+                        f"JSON string: '{specs_json_str}'"
+                    )
+                    log.error(f"{lp}{err_msg}")
+                    err_msg = f"{results.get('err_msg', '')}; {err_msg}".lstrip("; ")
+                    results["err_msg"] = err_msg
+                    # Indicate parsing failure with empty dict
+                    results["remote_specs"] = {}
+                    parsed_specs = True  # Attempted parsing
+                continue
+
+        log.debug(f"{lp}Unparsed line: {line}")
+
+    if results["remote_specs"] is None:  # If no prefix match at all
+        log.debug(
+            f"{lp}Remote kernel specs prefix '{KERNEL_SPECS_PREFIX}' not found in "
+            f"output."
+        )
+        results["remote_specs"] = {}
+
+    if results["uname"] is None and not results.get("err_msg", None):
+        msg = f"Failed to retrieve uname from remote host {host_alias!r}."
+        log.debug(f"{lp}{msg}")
+        results["err_msg"] = f"{results.get('err_msg', '')}; {msg}".lstrip("; ")
+
+    return results
