@@ -3,7 +3,7 @@ import logging
 import re
 from pathlib import Path
 from shutil import which
-from subprocess import PIPE, STDOUT, run
+from subprocess import PIPE, STDOUT, Popen, run
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from jupyter_client.connect import find_connection_file
@@ -431,14 +431,14 @@ def remote_checks(
     rpy_safe = f'"{remote_python_path}"'
     commands = [
         f'echo "{UNAME_PREFIX}=$(uname -a)"',
-        f"RPP={rpy_safe}",
-        'test -e "$RPP" && test -r "$RPP" && test -x "$RPP"',
+        f"FP_PY={rpy_safe}",
+        'test -e "$FP_PY" && test -r "$FP_PY" && test -x "$FP_PY"',
         f'echo "{REMOTE_PYTHON_EXEC_PREFIX}=$?"',
         # Use the user-provided remote_script_dir directly, letting remote shell
         # handle expansion
-        f'RSD="{remote_script_dir}"',
-        'test -d "$RSD"',
-        f'echo "{REMOTE_SCRIPT_DIR_PREFIX}=$RSD"',
+        f'RS_DIR_FD="{remote_script_dir}"',
+        'test -d "$RS_DIR_FD"',
+        f'echo "{REMOTE_SCRIPT_DIR_PREFIX}=$RS_DIR_FD"',
         f'echo "{REMOTE_SCRIPT_DIR_OK_PREFIX}=$?"',
         # If remote_python_path is invalid, this command part will fail.
         f"printf '{KERNEL_SPECS_PREFIX}=' && {rpy_safe} -c '{GET_ALL_SPECS_PY}'",
@@ -449,12 +449,13 @@ def remote_checks(
     cmd = [ssh_bin, "-vvv", host_alias, cmd_str]
     log.debug(f"{lp}Performing remote checks on {host_alias!r} with {cmd_str = }")
     try:
-        ret = run(  # noqa: S603
+        process = Popen(  # noqa: S603
             cmd,
-            capture_output=True,
-            text=True,
-            check=False,  # We parse output even if some commands fail
-            timeout=LAUNCH_TIMEOUT,
+            stdout=PIPE,
+            stderr=PIPE,
+            stdin=PIPE,
+            bufsize=1,
+            universal_newlines=True,
         )  # type: ignore
     except Exception as e:
         msg = f"{lp}Failed to execute remote checks command on {host_alias!r}: '{e}'"
@@ -462,15 +463,18 @@ def remote_checks(
         results["err_msg"] = msg
         return results
 
-    stdout = ret.stdout.strip()
-    stderr = ret.stderr.strip()
-    results["stdout"] = stdout
+    stdout, stderr = process.communicate(timeout=LAUNCH_TIMEOUT)
+    results["stdout"] = stdout.strip()
+    results["stderr"] = stderr.strip()
+    process.stdin.close()
+    process.terminate()
+    process.wait()
 
     # Even if ret.returncode != 0, there might be partial results in stdout.
-    if ret.returncode != 0:
+    if process.returncode != 0:
         msg = (
             f"{lp}SSH command for checks on {host_alias!r} exited "
-            f"with rc={ret.returncode}. "
+            f"with rc={process.returncode}. "
             f"stdout: '{stdout}'. "
             f"stderr: '{stderr}'."
         )
