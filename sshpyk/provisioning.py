@@ -113,6 +113,18 @@ class UnicodePath(Unicode):
             self.error(obj, value)
 
 
+class UnicodeAbsolutePath(Unicode):
+    def validate(self, obj, value):
+        value = super().validate(obj, value)
+        try:
+            p = Path(value)  # should raise if not a valid path
+            if not p.is_absolute():
+                raise ValueError(f"Path {value!r} is not absolute.")
+            return value
+        except:  # noqa: E722
+            self.error(obj, value)
+
+
 class KernelName(Unicode):
     def validate(self, obj, value):
         # value = super().validate(obj, value) # not needed since we use regex
@@ -141,7 +153,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         "It must be defined in your local SSH config file.",
         allow_none=False,
     )
-    remote_python = UnicodePath(
+    remote_python = UnicodeAbsolutePath(
         config=True,
         help="Path to the Python executable on the remote system. "
         "Run `which python` on the remote system to find its path. "
