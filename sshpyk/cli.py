@@ -240,6 +240,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         "interrupt_mode_remote": None,
         "ssh_configs_val": None,
         "rsd_ok": None,
+        "script_dir": None,  # as echoed on remote
     }
     try:
         ssh_bin = verify_local_ssh(kernel.get("ssh", None), name="ssh")
@@ -277,12 +278,13 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
             results["exec_ok"] = bool(exec_ok)
 
             # Check remote script directory exists
-            rsd_ok, _ = verify_rem_dir_exists(
+            rsd_ok, rsd_dir = verify_rem_dir_exists(
                 ssh_bin,
                 kernel["host"],
                 kernel["remote_script_dir"],
             )
             results["rsd_ok"] = bool(rsd_ok)
+            results["script_dir"] = rsd_dir
 
             # Check remote kernel exists
             remote_specs = get_remote_kernel_specs(
@@ -356,7 +358,11 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
         host_prefix = " (jump)"
 
     c = format_check(check_res["rsd_ok"])
-    k_lines.append(f"{C}{K_RSD:<{K_LEN}}{N} {c} {kernel['remote_script_dir']}")
+    rsd = kernel["remote_script_dir"]
+    if check_res["script_dir"] and check_res["script_dir"] != rsd:
+        rsd = f"{rsd} ({check_res['script_dir']})"
+    k_lines.append(f"{C}{K_RSD:<{K_LEN}}{N} {c} {rsd}")
+
     c = format_check(check_res["ssh_ok"])
     k_lines.append(f"{C}{K_CONN:<{K_LEN}}{N} {c} {kernel['host']}")
 

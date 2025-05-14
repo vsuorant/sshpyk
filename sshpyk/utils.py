@@ -318,7 +318,7 @@ def verify_rem_dir_exists(
 ) -> Tuple[bool, str]:
     """Verify that the remote directory exists."""
     # NB the quotes around dir_path are mandatory and safer
-    cmd = [ssh, host_alias, f'test -d "{dir_path}"']
+    cmd = [ssh, host_alias, f'echo "{dir_path}" && test -d "{dir_path}"']
     log.debug(
         f"{lp}Verifying remote directory {dir_path!r} on {host_alias!r}: {cmd = }"
     )
@@ -336,7 +336,7 @@ def verify_rem_dir_exists(
     else:
         msg = f"{lp}Remote directory {dir_path!r} exists."
         log.debug(msg)
-    return ok, msg
+    return ok, ret.stdout.strip()
 
 
 def fetch_remote_kernel_specs(
