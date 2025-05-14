@@ -237,6 +237,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         "interrupt_mode_remote": None,
         "ssh_configs_val": None,
         "rsd_ok": None,
+        "script_dir": None,  # as echoed on remote
     }
     try:
         ssh_bin = verify_local_ssh(kernel.get("ssh", None), name="ssh")
@@ -322,6 +323,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
 
         results["exec_ok"] = check_data.get("python_exec_ok")
         results["rsd_ok"] = check_data.get("script_dir_ok")
+        results["script_dir"] = check_data.get("script_dir")
 
         remote_specs = check_data.get("remote_specs", {})
 
@@ -402,7 +404,10 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
     c = format_check(check_res["ssh_ok"])
     k_lines.append(f"{C}{K_CONN:<{K_LEN}}{N} {c} {kernel['host']}")
     c = format_check(check_res["rsd_ok"])
-    k_lines.append(f"{C}{K_RSD:<{K_LEN}}{N} {c} {kernel['remote_script_dir']}")
+    rsd = kernel["remote_script_dir"]
+    if check_res["script_dir"]:
+        rsd += f" ({check_res['script_dir']})"
+    k_lines.append(f"{C}{K_RSD:<{K_LEN}}{N} {c} {rsd}")
 
     if check_res["uname"]:
         k_lines.append(f"{C}{K_RUNAME:<{K_LEN}}{N} {check_res['uname']}")

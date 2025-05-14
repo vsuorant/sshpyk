@@ -30,7 +30,9 @@ RGX_KERNEL_SPECS_PREFIX = re.compile(rf"{KERNEL_SPECS_PREFIX}=(.+)")
 REMOTE_PYTHON_EXEC_PREFIX = "SSHPYK_REMOTE_PYTHON_EXEC"
 RGX_REMOTE_PYTHON_EXEC_PREFIX = re.compile(rf"{REMOTE_PYTHON_EXEC_PREFIX}=(\d+)")
 REMOTE_SCRIPT_DIR_PREFIX = "SSHPYK_REMOTE_SCRIPT_DIR"
-RGX_REMOTE_SCRIPT_DIR_PREFIX = re.compile(rf"{REMOTE_SCRIPT_DIR_PREFIX}=(\d+)")
+RGX_REMOTE_SCRIPT_DIR_PREFIX = re.compile(rf"{REMOTE_SCRIPT_DIR_PREFIX}=(.+)")
+REMOTE_SCRIPT_DIR_OK_PREFIX = "SSHPYK_REMOTE_SCRIPT_DIR_OK"
+RGX_REMOTE_SCRIPT_DIR_OK_PREFIX = re.compile(rf"{REMOTE_SCRIPT_DIR_OK_PREFIX}=(\d+)")
 
 SSHPYK_PERSISTENT_FP_BASE = "sshpyk-kernel"
 
@@ -421,6 +423,7 @@ def remote_checks(
         "uname": None,
         "python_exec_ok": None,
         "script_dir_ok": None,
+        "script_dir": None,
         "remote_specs": None,
         "err_msg": None,
         "stdout": None,
@@ -435,7 +438,8 @@ def remote_checks(
         # handle expansion
         f'RSD="{remote_script_dir}"',
         'test -d "$RSD"',
-        f'echo "{REMOTE_SCRIPT_DIR_PREFIX}=$?"',
+        f'echo "{REMOTE_SCRIPT_DIR_PREFIX}=$RSD"',
+        f'echo "{REMOTE_SCRIPT_DIR_OK_PREFIX}=$?"',
         # If remote_python_path is invalid, this command part will fail.
         f"printf '{KERNEL_SPECS_PREFIX}=' && {rpy_safe} -c '{GET_ALL_SPECS_PY}'",
     ]
@@ -450,7 +454,7 @@ def remote_checks(
             capture_output=True,
             text=True,
             check=False,  # We parse output even if some commands fail
-            timeout=LAUNCH_TIMEOUT * 2,
+            timeout=LAUNCH_TIMEOUT,
         )  # type: ignore
     except Exception as e:
         msg = f"{lp}Failed to execute remote checks command on {host_alias!r}: '{e}'"
@@ -499,10 +503,16 @@ def remote_checks(
             log.debug(f"{lp}Parsed python_exec_ok: {results['python_exec_ok']}")
             continue
 
-        script_dir_match = RGX_REMOTE_SCRIPT_DIR_PREFIX.search(line)
+        script_dir_match = RGX_REMOTE_SCRIPT_DIR_OK_PREFIX.search(line)
         if script_dir_match:
             results["script_dir_ok"] = script_dir_match.group(1).strip() == "0"
             log.debug(f"{lp}Parsed script_dir_ok: {results['script_dir_ok']}")
+            continue
+
+        script_dir_match = RGX_REMOTE_SCRIPT_DIR_PREFIX.search(line)
+        if script_dir_match:
+            results["script_dir"] = script_dir_match.group(1).strip()
+            log.debug(f"{lp}Parsed script_dir: {results['script_dir']}")
             continue
 
         if not parsed_specs:
