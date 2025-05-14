@@ -21,6 +21,7 @@ from traitlets import Enum as EnumTrait
 
 from .kernelapp import EXISTING, PERSISTENT, PERSISTENT_FILE, SSH_VERBOSE
 from .utils import (
+    DEFAULT_REMOTE_SCRIPT_DIR,
     LAUNCH_TIMEOUT,
     RGX_UNAME_PREFIX,
     SHUTDOWN_TIME,
@@ -210,7 +211,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         allow_none=False,
         # By default share the .ssh dir since that one is usually already present and
         # we avoid polluting the remote user's home dir.
-        default_value="$HOME/.ssh/sshpyk",
+        default_value=DEFAULT_REMOTE_SCRIPT_DIR,
     )
     existing = Unicode(**EXISTING)  # type: ignore
     persistent = Bool(**PERSISTENT)  # type: ignore

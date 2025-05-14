@@ -10,6 +10,7 @@ from jupyter_client.kernelspec import KernelSpecManager
 
 from .provisioning import RGX_KERNEL_NAME, RGX_SSH_HOST_ALIAS
 from .utils import (
+    DEFAULT_REMOTE_SCRIPT_DIR,
     LAUNCH_TIMEOUT,
     SHUTDOWN_TIME,
     fetch_remote_kernel_specs,
@@ -59,6 +60,7 @@ K_INT = "Interrupt Mode:"
 K_RINT = "Remote Interrupt Mode:"
 K_RRES = "Remote Resource Dir:"
 K_RUNAME = "Remote System:"
+K_RSD = "Remote Script Dir:"
 
 ALL_KEYS = [
     K_NAME,
@@ -80,6 +82,7 @@ ALL_KEYS = [
     K_INT,
     K_RINT,
     K_RRES,
+    K_RSD,
 ]
 
 # Global variable for maximum key length
@@ -180,6 +183,7 @@ def extract_ssh_kernel_info(
         "shutdown_timeout": config.get("shutdown_timeout", SHUTDOWN_TIME),
         "interrupt_mode": interrupt_mode,
         "ssh": config.get("ssh", None),
+        "remote_script_dir": config.get("remote_script_dir", DEFAULT_REMOTE_SCRIPT_DIR),
     }
 
 
@@ -341,6 +345,7 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
             k_lines.append(f"{C}{'':<{K_LEN}}{N} {offset} {c} {k}: {msg}")
         host_prefix = " (jump)"
 
+    k_lines.append(f"{C}{K_RSD:<{K_LEN}}{N} {kernel['remote_script_dir']}")
     c = format_check(check_res["ssh_ok"])
     k_lines.append(f"{C}{K_CONN:<{K_LEN}}{N} {c} {kernel['host']}")
 
@@ -530,6 +535,8 @@ def edit_kernel(args: argparse.Namespace) -> None:
         config["launch_timeout"] = args.launch_timeout
     if args.shutdown_timeout:
         config["shutdown_timeout"] = args.shutdown_timeout
+    if args.remote_script_dir:
+        config["remote_script_dir"] = args.remote_script_dir
 
     # Write updated kernel.json
     with open(kernel_json_path, "w", encoding="utf-8") as f:
@@ -635,6 +642,11 @@ def main() -> None:
         "after which an equal amount of time will be waited for the kernel to exit.",
     )
     add_parser.add_argument(
+        "--remote-script-dir",
+        help="Path to a remote directory for sshpyk scripts "
+        + f"(default: {DEFAULT_REMOTE_SCRIPT_DIR})",
+    )
+    add_parser.add_argument(
         "--replace",
         action="store_true",
         help="Replace existing kernel with the same name if it exists",
@@ -684,6 +696,11 @@ def main() -> None:
         "If the kernel does not shutdown within this time, "
         "it will be killed forcefully, "
         "after which an equal amount of time will be waited for the kernel to exit.",
+    )
+    edit_parser.add_argument(
+        "--remote-script-dir",
+        help="Path to a remote directory for sshpyk scripts. "
+        "If not specified, the existing value will be kept.",
     )
     edit_parser.add_argument(
         "--ssh",

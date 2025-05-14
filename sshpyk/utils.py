@@ -30,6 +30,8 @@ RGX_GET_SPECS_PREFIX = re.compile(rf"{GET_SPECS_PREFIX}=(.+)")
 
 SSHPYK_PERSISTENT_FP_BASE = "sshpyk-kernel"
 
+DEFAULT_REMOTE_SCRIPT_DIR = "$HOME/.ssh/sshpyk"
+
 
 def verify_local_ssh(
     ssh: Optional[str], log: logging.Logger = logger, name: str = "ssh", lp: str = ""
