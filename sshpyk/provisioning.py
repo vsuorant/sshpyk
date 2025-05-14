@@ -32,8 +32,8 @@ from .utils import (
     verify_local_ssh,
 )
 
-REMOTE_INFO_LINE = " ".join(
-    f"SSHPYK_{k}={v}"
+REMOTE_INFO_LINE = "; ".join(
+    f"echo SSHPYK_{k}={v}"
     for k, v in (
         ("SHELL", "$SHELL"),
         ("HOST", "$(hostname)"),
@@ -42,18 +42,23 @@ REMOTE_INFO_LINE = " ".join(
         ("HOME_OK", '$(if test -d $HOME; then echo "yes"; else echo "no"; fi)'),
     )
 )
+KERNELAPP_FP_PREFIX = "SSHPYK_KERNELAPP_FP"
+PY_SIZE_PREFIX = "SSHPYK_KERNELAPP_PY_SIZE"
+
 EXEC_PREFIX = "SSHPYK_KERNELAPP_EXEC"
 RGX_EXEC_PREFIX = re.compile(rf"{EXEC_PREFIX}=(\d+)")
+PYTHON_EXEC_PREFIX = "SSHPYK_PYTHON_EXEC"
+RGX_PYTHON_EXEC_PREFIX = re.compile(rf"{PYTHON_EXEC_PREFIX}=(\d+)")
 PS_PREFIX = "SSHPYK_PS_OUTPUT_START"
 RGX_PS_PREFIX = re.compile(rf"{PS_PREFIX}=(.+)")
 CONN_INFO_PREFIX = "SSHPYK_CONNECTION_INFO_JSON"
 RGX_CONN_INFO_PREFIX = re.compile(rf"{CONN_INFO_PREFIX}=(.+)")
 RGX_CONN_FP = re.compile(r"\[SSHKernelApp\].*file: (.*\.json)")
 RGX_CONN_CLIENT = re.compile(r"\[SSHKernelApp\].*client: (.*\.json)")
-PID_PREFIX_KERNEL_APP = "SSHPYK_KERNEL_APP_PID"
-RGX_PID_KERNEL_APP = re.compile(rf"{PID_PREFIX_KERNEL_APP}=(\d+)")
-PID_PREFIX_KERNEL = "SSHPYK_KERNEL_PID"
-RGX_PID_KERNEL = re.compile(rf"{PID_PREFIX_KERNEL}=(\d+)")
+PID_KERNEL_APP_PREFIX = "SSHPYK_KERNEL_APP_PID"
+RGX_PID_KERNEL_APP = re.compile(rf"{PID_KERNEL_APP_PREFIX}=(\d+)")
+PID_KERNEL_PREFIX = "SSHPYK_KERNEL_PID"
+RGX_PID_KERNEL = re.compile(rf"{PID_KERNEL_PREFIX}=(\d+)")
 REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
 # extracted from jupyter_client/kernelspec.py
 RGX_KERNEL_NAME = re.compile(r"^[a-z0-9._-]+$", re.IGNORECASE)
@@ -297,6 +302,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             return True
         return False
 
+    def extract_rem_python_exec_ok_handler(self, line: str):
+        match = RGX_PYTHON_EXEC_PREFIX.search(line)
+        if match:
+            self.rem_python_exec_ok = match.group(1) == "0"
+            self.ld(f"Remote python executable status: {self.rem_python_exec_ok}")
+            return True
+        return False
+
     def extract_rem_pid_ka_handler(self, line: str):
         match = RGX_PID_KERNEL_APP.search(line)
         if match:
@@ -337,13 +350,23 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.rem_exec_ok = None  # reset
         try:
             future = self.extract_from_process_pipes(
-                process=process, line_handlers=[self.extract_rem_exec_ok_handler]
+                process=process,
+                line_handlers=[
+                    self.extract_rem_python_exec_ok_handler,
+                    self.extract_rem_exec_ok_handler,
+                ],
             )
             await asyncio.wait_for(future, timeout=self.launch_timeout)
         except TimeoutError as e:
             msg = f"Timed out waiting {self.launch_timeout}s to write the remote script"
             self.le(msg)
             raise RuntimeError(msg) from e
+
+        if not self.rem_python_exec_ok:
+            p = self.remote_python
+            msg = f"Remote python '{p}' executable not found/readable/executable."
+            self.le(msg)
+            raise RuntimeError(msg)
 
         if not self.rem_exec_ok:
             cmd = [*self.ssh_base, self.ssh_host_alias]  # type: ignore
@@ -427,7 +450,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             cmd = [
                 *self.ssh_base,
                 self.ssh_host_alias,
-                f"echo {PID_PREFIX_KERNEL}=$(pgrep -P {self.rem_pid_ka}); "
+                f"echo {PID_KERNEL_PREFIX}=$(pgrep -P {self.rem_pid_ka}); "
                 # print the connection file on a single line prefixed with a string
                 # so that we can parse it later
                 # ! `echo -n` is not supported on all systems, use `printf` instead.
@@ -644,13 +667,22 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             f"{remote_script_fp!r}"
         )
         script = f"#!{self.remote_python}\n{KERNELAPP_PY}"
+        py_size = len(script.encode())
         cmd = [
-            # For debugging purposes
-            f'echo "{REMOTE_INFO_LINE}"',
+            REMOTE_INFO_LINE,
+            # If the python executable is not correct `nohub` gives unrelated errors
+            # like 'nohup: /.../sshpyk-kernel-v666a490b: No such file or directory'
+            f'FP_PY="{self.remote_python}"',
+            'test -e "$FP_PY" && test -r "$FP_PY" && test -x "$FP_PY"',
+            f'echo "{PYTHON_EXEC_PREFIX}=$?"',
             f'mkdir -p "{self.remote_script_dir}"',
-            f'cat > "{remote_script_fp}"',
-            f'chmod 755 "{remote_script_fp}"',
-            f"echo {EXEC_PREFIX}=$?",
+            f'FP_KA="{remote_script_fp}"',
+            f'echo {KERNELAPP_FP_PREFIX}="$FP_KA"',
+            'cat > "$FP_KA"',
+            f'{PY_SIZE_PREFIX}=$(cat "$FP_KA" | wc -c | tr -d " ")',
+            f'echo "{PY_SIZE_PREFIX}=${PY_SIZE_PREFIX} ({py_size} sent)"',
+            'chmod 755 "$FP_KA"',
+            f'echo "{EXEC_PREFIX}=$?"',
         ]
         self.ld(f"Remote command {cmd = }")
         cmd = [*self.ssh_base, self.ssh_host_alias, "; ".join(cmd)]
@@ -822,15 +854,16 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # `exec` ensures the `cmd` will have the same PID output by `echo $$`.
         # For robustness print a variable name and we extract it with regex later
         cmd_parts = [
-            # For debugging purposes
-            f'echo "{REMOTE_INFO_LINE}"',
+            REMOTE_INFO_LINE,
             # Print `uname` of remote system
             f'echo "{UNAME_PREFIX}=$(uname -a)"',
-            f'FPJ="{remote_script_fp}"',
-            "test -e $FPJ && test -r $FPJ && test -x $FPJ",
+            f'FP_KA="{remote_script_fp}"',
+            f'echo {KERNELAPP_FP_PREFIX}="$FP_KA"',
+            'test -e "$FP_KA" && test -r "$FP_KA" && test -x "$FP_KA"',
             f'echo "{EXEC_PREFIX}=$?"',
+            f'echo {PY_SIZE_PREFIX}=$(cat "$FP_KA" | wc -c | tr -d " ")',
             # Print the PID of the remote SSHKernelApp process
-            f'echo "{PID_PREFIX_KERNEL_APP}=$$"',
+            f'echo "{PID_KERNEL_APP_PREFIX}=$$"',
             # Launch the SSHKernelApp
             f"exec nohup {cmd}",
         ]
