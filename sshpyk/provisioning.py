@@ -32,7 +32,16 @@ from .utils import (
     verify_local_ssh,
 )
 
-REMOTE_INFO_LINE = "SSHPYK_SHELL=$SHELL SSHPYK_HOST=$(hostname) SSHPYK_USER=$USER"
+REMOTE_INFO_LINE = " ".join(
+    f"SSHPYK_{k}={v}"
+    for k, v in (
+        ("SHELL", "$SHELL"),
+        ("HOST", "$(hostname)"),
+        ("USER", "$USER"),
+        ("HOME", "$HOME"),
+        ("HOME_OK", '$(if test -d $HOME; then echo "yes"; else echo "no"; fi)'),
+    )
+)
 EXEC_PREFIX = "SSHPYK_KERNELAPP_EXEC"
 RGX_EXEC_PREFIX = re.compile(rf"{EXEC_PREFIX}=(\d+)")
 PS_PREFIX = "SSHPYK_PS_OUTPUT_START"
@@ -292,7 +301,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         match = RGX_PID_KERNEL_APP.search(line)
         if match:
             self.rem_pid_ka = int(match.group(1))
-            self.li(f"Remote SSHKernelApp launched, RPID={self.rem_pid_ka}")
+            self.li(f"Expected SSHKernelApp RPID={self.rem_pid_ka}")
             return True
         return False
 
