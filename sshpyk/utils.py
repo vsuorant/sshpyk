@@ -250,7 +250,7 @@ def verify_ssh_connection(
     lp: str = "",
 ) -> Tuple[bool, str, str]:
     """Verify that the SSH connection to the remote host is working."""
-    cmd = [ssh, "-q", host_alias, f"echo '{UNAME_PREFIX}=$(uname -a)'"]
+    cmd = [ssh, "-q", host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
     log.debug(f"{lp}Verifying SSH connection to {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
