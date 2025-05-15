@@ -31,6 +31,7 @@ from .utils import (
     get_local_ssh_configs,
     validate_ssh_config,
     verify_local_ssh,
+    verify_ssh_connection,
 )
 
 REMOTE_INFO_LINE = "; ".join(
@@ -220,7 +221,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     log_prefix = ""
 
     ssh_base = []
-
+    all_hosts = []
     _fetch_remote_processes_lock = None
     _poll_lock = None
     _cleanup_lock = None
@@ -385,10 +386,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
             await asyncio.wait_for(future, timeout=self.launch_timeout)
             rc = process.returncode
-            if rc != 0:
-                cmd = [self.ssh, "-vvv", self.ssh_host_alias]  # type: ignore
-                msg = f"Failed to write the remote script, process exit code {rc}. "
-                msg += f"Check your SSH connection ({' '.join(cmd)})."
+            if rc is not None and rc != 0:
+                cmd = [*self.ssh_base_help, self.ssh_host_alias]  # type: ignore
+                msg = (
+                    f"Failed to write the remote script, process exit code {rc}. "
+                    f"Make sure you can connect manually (w/out any passwords): "
+                    f"'{' '.join(cmd)}'"
+                )
                 self.le(msg)
                 raise RuntimeError(msg)
         except TimeoutError as e:
@@ -417,11 +421,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise RuntimeError(msg)
 
         if not self.rem_ka_ok:
-            cmd = [self.ssh, "-vvv", self.ssh_host_alias]  # type: ignore
+            cmd = [*self.ssh_base_help, self.ssh_host_alias]  # type: ignore
             msg = (
                 "Remote SSHKernelApp script not found/readable/executable. "
-                f"Check your SSH connection ({' '.join(cmd)}) and "
-                f"the remote {self.remote_script_dir} permissions."
+                f"Make sure you can connect (w/out any passwords) '{' '.join(cmd)}' "
+                f"and the remote of {self.remote_script_dir!r} permissions are correct."
             )
             self.le(msg)
             raise RuntimeError(msg)
@@ -460,10 +464,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
             await asyncio.wait_for(future, timeout=self.launch_timeout)
             rc = process.returncode
-            if rc != 0:
-                cmd = [self.ssh, "-vvv", self.ssh_host_alias]  # type: ignore
-                msg = f"Failed to launch the remote kernel, process exit code {rc}. "
-                msg += f"Check your SSH connection ({' '.join(cmd)})."
+            if rc is not None and rc != 0:
+                cmd = [*self.ssh_base_help, self.ssh_host_alias]  # type: ignore
+                msg = (
+                    f"Failed to launch the remote kernel, process exit code {rc}. "
+                    f"Make sure you can connect manually (w/out any passwords): "
+                    f"'{' '.join(cmd)}'"
+                )
                 self.le(msg)
                 raise RuntimeError(msg)
         except TimeoutError as e:
@@ -472,10 +479,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise RuntimeError(msg) from e
 
         if not self.rem_sys_name:
-            cmd = [self.ssh, "-vvv", self.ssh_host_alias]  # type: ignore
+            cmd = [*self.ssh_base_help, self.ssh_host_alias]  # type: ignore
             msg = (
                 "Could not extract remote system name. "
-                f"Check your SSH connection manually with '{' '.join(cmd)}'."
+                f"Make sure you can connect manually (w/out any passwords): "
+                f"'{' '.join(cmd)}'"
             )
             self.le(msg)
             raise RuntimeError(msg)
@@ -501,6 +509,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     async def fetch_remote_connection_info(self):
         try:
+            await self.check_control_sockets()
             # For details on the way the processes are spawned see the Popen call in
             # pre_launch().
             cmd = [
@@ -691,12 +700,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         else:
             self.ssh_base = [self.ssh]
 
+        # BatchMode is expected to be set to 'yes' in the config, must be overridden
+        # otherwise it is hard to figure out if some interactive input is required.
+        # That can happen when, e.g., a password prompt is required.
+        self.ssh_base_help = [self.ssh, "-o", "BatchMode=no", "-vvv"]
+
         configs = get_local_ssh_configs(
             self.ssh, alias=self.ssh_host_alias, log=self.log, lp=self.log_prefix
         )
         for config in configs:
             valid = validate_ssh_config(config, log=self.log, lp=self.log_prefix)
-            host = config.get("host", None)
+            host = config["host"]
             for k, v in valid.items():
                 self.li(f"{self.log_prefix}[Local ssh config for '{host}'] {k}: {v}")
             for k, (v, msg) in valid.items():
@@ -706,10 +720,88 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                         "Verify your local ssh config (e.g., ~/.ssh/config)."
                     )
 
+        # Reverse them so that we check the control sockets in the same orders as the
+        # connections are established.
+        self.all_hosts = [config["host"] for config in reversed(configs)]
+
         if self.parent is None:
             raise RuntimeError("Parent KernelManager not set")
 
         # ! REMINDER: this method is NOT called on kernel restarts.
+
+    async def has_control_socket(self, alias: str, log_error: bool = False):
+        cmd = [*self.ssh_base, "-O", "check", alias]
+        self.ld(f"Checking local control socket for '{alias}': {cmd = }")
+        process = subprocess.Popen(  # noqa: S603
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE,
+            start_new_session=self.independent_local_processes,
+            bufsize=1,
+            universal_newlines=True,
+        )
+        self.popen_procs[process.pid] = process
+        process.stdin.close()
+        for k in ("stdout", "stderr"):
+            for line in getattr(process, k):
+                line = line.strip()
+                if not line:
+                    continue
+                self.ld(f"[Process {process.pid}] {k}: {line}")
+        await self.terminate_popen(process)
+        self.ld(f"[Process {process.pid}] exit code: {process.returncode}")
+        socket_ok = process.returncode == 0
+        if socket_ok:
+            self.ld(f"Host '{alias}' has a control socket.")
+        else:
+            msg = f"Host '{alias}' does not have a control socket."
+            if log_error:
+                self.le(msg)
+            else:
+                self.ld(msg)
+        return socket_ok
+
+    async def check_control_sockets(self, attempt_open: bool = False):
+        for host in self.all_hosts:
+            if not isinstance(host, str):
+                raise RuntimeError(f"Invalid host alias: {host!r}")
+            socket_ok = await self.has_control_socket(host)
+
+            if socket_ok:
+                continue
+            if not attempt_open:
+                continue
+
+            # Try to open the control socket (a few times) by verifying the connection.
+            # Since we require ControlMaster=auto, ssh will automatically create the
+            # control socket if it is not present.
+            ok = False
+            for _ in range(3):
+                ok, _ = verify_ssh_connection(
+                    ssh=self.ssh,  # type: ignore
+                    host_alias=host,
+                    log=self.log,
+                    lp=self.log_prefix,
+                    verbose=f"-{self.ssh_verbose}" if self.ssh_verbose else None,
+                    start_new_session=self.independent_local_processes,
+                    timeout=self.launch_timeout,
+                )
+                if ok:
+                    break
+                await asyncio.sleep(0.2)
+
+            if ok:
+                continue  # continue to the next host
+
+            cmd = [*self.ssh_base_help, host]
+            msg = (
+                f"Failed to open control socket for {host!r}. "
+                "Make sure you can connect manually (w/out any passwords) "
+                f"to {host!r}: '{' '.join(cmd)}'"
+            )
+            self.le(msg)
+            raise RuntimeError(msg)
 
     def make_remote_script_fp(self):
         """Make the remote script file path."""
@@ -740,6 +832,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             'chmod 755 "$FP_KA"',
             f'echo "{KA_CHECK}=$?"',
         ]
+        # not needed since we do it in pre_launch()
+        # await self.check_control_sockets()
         self.ld(f"Remote command {cmd = }")
         cmd = [*self.ssh_base, self.ssh_host_alias, "; ".join(cmd)]
         self.ld(f"Local command {cmd = }")
@@ -774,6 +868,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if not self.restart_requested:
             # loads local ip/ports/key/etc into KernelManager/Session
             self.load_connection_file()
+
+        # Tries to open the control socket (a few times).
+        # If any control socket fails it will raise an error.
+        # We only raise during a kernel launch (or connection) attempt and not on every
+        # ssh command because the problem might be a temporary network connection issue
+        # and not a problem with the ssh configuration.
+        await self.check_control_sockets(attempt_open=True)
 
         if not self.existing:
             await self.launch_remote_kernel()
@@ -927,6 +1028,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # Launch the SSHKernelApp
             f"exec nohup {cmd}",
         ]
+        await self.check_control_sockets()
         cmd = "; ".join(cmd_parts)
         self.ld(f"Remote command {cmd = }")
         cmd = [
@@ -1011,6 +1113,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         await self.make_kernel_tunnels_args()  # closes old tunnels if needed
         if not self.kernel_tunnels_args:
             raise RuntimeError(f"Unexpected {self.kernel_tunnels_args = }")
+        await self.check_control_sockets()
         cmd = [
             *self.ssh_base,
             "-O",  # mute ssh output
@@ -1050,10 +1153,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             msg = f"Tunnels to host {alias!r} for kernel ports seem opened"
             log_func = self.ld
 
+        cmd = [*self.ssh_base_help[:-1], "-M", "-f", "-N", alias]
         msg_warn = (
             "You might have lost the control socket (e.g. WiFi disconnected). "
-            f"Make sure {alias!r} is reachable. If you had run "
-            f"`ssh -M -f -N {alias}` "
+            f"Make sure {alias!r} is reachable. If you had run '{' '.join(cmd)}' "
             f"to input the login password for {alias!r} "
             "before starting the kernel, you have to manually run it again."
         )
@@ -1066,6 +1169,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         log_func(msg)
 
     async def close_tunnels(self, tunnels_args: List[str]):
+        await self.check_control_sockets()
         cmd = [
             *self.ssh_base,
             "-O",  # mute ssh output
@@ -1357,6 +1461,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             comm = "command"  # ! On macOS comm/args does not display the full command
         else:  # assume unix
             comm = "args"  # ? does this displays the full command on unix?
+        await self.check_control_sockets()
         cmd = [
             *self.ssh_base,
             self.ssh_host_alias,
@@ -1578,6 +1683,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if signum not in (SIGINT, SIGTERM, SIGKILL):
             raise ValueError(f"Invalid signal number {signum}")
         try:
+            await self.check_control_sockets()
             cmd = [*self.ssh_base, self.ssh_host_alias, f"kill -{signum} {pid}"]
             proc = await asyncio.create_subprocess_exec(
                 *cmd,

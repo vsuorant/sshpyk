@@ -34,7 +34,11 @@ DEFAULT_REMOTE_SCRIPT_DIR = "$HOME/.ssh/sshpyk"
 
 
 def verify_local_ssh(
-    ssh: Optional[str], log: logging.Logger = logger, name: str = "ssh", lp: str = ""
+    ssh: Optional[str],
+    log: logging.Logger = logger,
+    name: str = "ssh",
+    lp: str = "",
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
 ) -> str:
     """Verify that the local SSH is working."""
     if not ssh:
@@ -53,6 +57,7 @@ def verify_local_ssh(
         stderr=STDOUT,  # at least OpenSSH outputs version to stderr
         text=True,
         check=False,
+        timeout=timeout,
     )  # type: ignore
     ok = ret.returncode == 0
     out = ret.stdout.strip()
@@ -88,6 +93,7 @@ def get_local_ssh_configs(
     alias: str,
     log: logging.Logger = logger,
     lp: str = "",
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
 ) -> List[Dict[str, Union[str, List[str]]]]:
     aliases = [alias]
     hosts_configs = []
@@ -101,6 +107,7 @@ def get_local_ssh_configs(
             capture_output=True,
             text=True,
             check=False,
+            timeout=timeout,
         )  # type: ignore
         ok = ret.returncode == 0
         if not ok:
@@ -141,6 +148,7 @@ def validate_ssh_config(
     keys = [
         "hostname",
         "user",
+        "batchmode",
         "identityfile",
         "controlmaster",
         "controlpersist",
@@ -176,6 +184,16 @@ def validate_ssh_config(
                 )
         else:
             out["hostname"] = ("error", "Missing, must be set in the ssh config.")
+
+    if "batchmode" in keys:
+        bm = config.get("batchmode", None)
+        if bm:
+            if bm in ("yes", "true"):
+                out["batchmode"] = ("ok", bm)
+            else:
+                out["batchmode"] = ("error", f"Must be 'yes', not {bm!r}.")
+        else:
+            out["batchmode"] = ("error", "Missing, must be 'yes'.")
 
     if "identityfile" in keys:
         id_file = config.get("identityfile", None)
@@ -254,37 +272,61 @@ def validate_ssh_config(
 def verify_ssh_connection(
     ssh: str,
     host_alias: str,
+    verbose: Optional[str] = None,
     log: logging.Logger = logger,
     lp: str = "",
-) -> Tuple[bool, str, str]:
+    start_new_session: bool = False,
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
+):
     """Verify that the SSH connection to the remote host is working."""
-    cmd = [ssh, "-q", host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
+    cmd = [ssh, host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
+    if verbose:
+        cmd.insert(1, verbose)
     log.debug(f"{lp}Verifying SSH connection to {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
-        capture_output=True,
+        stdout=PIPE,
+        stderr=PIPE,
         text=True,
         check=False,
+        start_new_session=start_new_session,
+        universal_newlines=True,
+        timeout=timeout,
     )  # type: ignore
-    raw_output = ret.stdout.strip()
+    stdout = ret.stdout.strip()
+    stderr = ret.stderr.strip()
 
     uname = ""
-    for line in raw_output.splitlines():
+    ok = ret.returncode == 0
+
+    for line in stderr.splitlines():
+        line = line.strip()
         if not line:
             continue
+        if ok:
+            log.debug(f"{lp}[{host_alias} stderr] {line}")
+        else:
+            log.error(f"{lp}[{host_alias} stderr] {line}")
+
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        log.debug(f"{lp}[{host_alias} stdout] {line}")
         match = RGX_UNAME_PREFIX.search(line)
         if match:
             uname = match.group(1)
             break
 
-    ok = ret.returncode == 0 and bool(uname)
+    ok = ok and bool(uname)
     if not ok:
-        msg = f"{lp}SSH connection to {host_alias!r} failed: {raw_output = !r}"
+        msg = f"{lp}SSH connection to {host_alias!r} failed "
+        msg += f"(exit code={ret.returncode})."
         log.error(msg)
     else:
-        msg = f"{lp}SSH connection to {host_alias!r} succeeded: {uname = !r}"
+        msg = f"{lp}SSH connection to {host_alias!r} succeeded: {uname = !r}."
         log.debug(msg)
-    return ok, msg, uname
+    return ok, uname
 
 
 def verify_rem_executable(
@@ -293,7 +335,8 @@ def verify_rem_executable(
     fp: str,
     log: logging.Logger = logger,
     lp: str = "",
-) -> Tuple[bool, str]:
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
+):
     """Verify that the remote executable exists and is executable."""
     # NB the quotes around filename are mandatory and safer
     cmd = [ssh, host_alias, f'test -e "{fp}" && test -r "{fp}" && test -x "{fp}"']
@@ -303,16 +346,17 @@ def verify_rem_executable(
         capture_output=True,
         text=True,
         check=False,
+        timeout=timeout,
     )  # type: ignore
     ok = ret.returncode == 0
-    ret_str = ret.stdout.strip()
     if not ok:
-        msg = f"{lp}Remote {fp!r} not found/readable/executable ({ret_str!r})"
+        msg = f"{lp}Remote {fp!r} not found/readable/executable "
+        msg += f"(exit code {ret.returncode})."
         log.error(msg)
     else:
         msg = f"{lp}Remote {fp!r} exists, is readable and executable."
         log.debug(msg)
-    return ok, msg
+    return ok
 
 
 def verify_rem_dir_exists(
@@ -321,6 +365,7 @@ def verify_rem_dir_exists(
     dir_path: str,
     log: logging.Logger = logger,
     lp: str = "",
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
 ) -> Tuple[bool, str]:
     """Verify that the remote directory exists."""
     # NB the quotes around dir_path are mandatory and safer
@@ -333,6 +378,7 @@ def verify_rem_dir_exists(
         capture_output=True,
         text=True,
         check=False,
+        timeout=timeout,
     )  # type: ignore
     ok = ret.returncode == 0
     if not ok:
@@ -351,6 +397,7 @@ def fetch_remote_kernel_specs(
     python: str,
     log: logging.Logger = logger,
     lp: str = "",
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
 ) -> dict:
     """
     Fetch kernel specifications from the remote host using SSH.
@@ -368,13 +415,14 @@ def fetch_remote_kernel_specs(
         capture_output=True,
         text=True,
         check=False,
+        timeout=timeout,
     )  # type: ignore
     if ret.returncode != 0:
         msg = f"{lp}Failed to fetch remote kernel specs: {ret.stderr.strip()!r}"
         log.error(msg)
         raise RuntimeError(msg)
-    raw_output = ret.stdout.strip()
-    lines = raw_output.splitlines()
+    stdout = ret.stdout.strip()
+    lines = stdout.splitlines()
     try:
         for line in lines:
             if not line:

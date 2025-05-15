@@ -260,7 +260,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         return results
 
     try:
-        ssh_ok, _, uname = verify_ssh_connection(ssh_bin, kernel["host"])
+        ssh_ok, uname = verify_ssh_connection(ssh_bin, kernel["host"])
         if not ssh_ok:
             results["ssh_ok"] = False
             return results
@@ -270,7 +270,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         if ssh_ok:
             results["ssh_ok"] = True
 
-            exec_ok, _ = verify_rem_executable(
+            exec_ok = verify_rem_executable(
                 ssh_bin,
                 kernel["host"],
                 kernel["remote_python"],
