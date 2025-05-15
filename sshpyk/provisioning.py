@@ -43,24 +43,23 @@ REMOTE_INFO_LINE = "; ".join(
         ("HOME_OK", '$(if test -d $HOME; then echo "yes"; else echo "no"; fi)'),
     )
 )
-KERNELAPP_FP_PREFIX = "SSHPYK_KERNELAPP_FP"
-PY_SIZE_PREFIX = "SSHPYK_KERNELAPP_PY_SIZE"
-
-EXEC_PREFIX = "SSHPYK_KERNELAPP_EXEC"
-RGX_EXEC_PREFIX = re.compile(rf"{EXEC_PREFIX}=(\d+)")
-PYTHON_EXEC_PREFIX = "SSHPYK_PYTHON_EXEC"
-RGX_PYTHON_EXEC_PREFIX = re.compile(rf"{PYTHON_EXEC_PREFIX}=(\d+)")
+KA_FP = "SSHPYK_KERNELAPP_FP"
+KA_SIZE = "SSHPYK_KERNELAPP_PY_SIZE"
+RGX_EXEC_SIZE = re.compile(rf"{KA_SIZE}=(\s*\d+)")
+KA_CHECK = "SSHPYK_KERNELAPP_CHECK"
+RGX_KA_CHECK = re.compile(rf"{KA_CHECK}=(\d+)")
+PY_CHECK = "SSHPYK_PYTHON_CHECK"
+RGX_PY_CHECK = re.compile(rf"{PY_CHECK}=(\d+)")
 PS_PREFIX = "SSHPYK_PS_OUTPUT_START"
 RGX_PS_PREFIX = re.compile(rf"{PS_PREFIX}=(.+)")
-CONN_INFO_PREFIX = "SSHPYK_CONNECTION_INFO_JSON"
-RGX_CONN_INFO_PREFIX = re.compile(rf"{CONN_INFO_PREFIX}=(.+)")
+CONN_INFO = "SSHPYK_CONNECTION_INFO_JSON"
+RGX_CONN_INFO = re.compile(rf"{CONN_INFO}=(.+)")
 RGX_CONN_FP = re.compile(r"\[SSHKernelApp\].*file: (.*\.json)")
 RGX_CONN_CLIENT = re.compile(r"\[SSHKernelApp\].*client: (.*\.json)")
-PID_KERNEL_APP_PREFIX = "SSHPYK_KERNEL_APP_PID"
-RGX_PID_KERNEL_APP = re.compile(rf"{PID_KERNEL_APP_PREFIX}=(\d+)")
-PID_KERNEL_PREFIX = "SSHPYK_KERNEL_PID"
-RGX_PID_KERNEL = re.compile(rf"{PID_KERNEL_PREFIX}=(\d+)")
-REM_SESSION_KEY_NAME = "SSHPYK_SESSION_KEY"
+PID_KA = "SSHPYK_KERNELAPP_PID"
+RGX_PID_KA = re.compile(rf"{PID_KA}=(\d+)")
+PID_KERNEL = "SSHPYK_KERNEL_PID"
+RGX_PID_KERNEL = re.compile(rf"{PID_KERNEL}=(\d+)")
 # extracted from jupyter_client/kernelspec.py
 RGX_KERNEL_NAME = re.compile(r"^[a-z0-9._-]+$", re.IGNORECASE)
 RGX_SSH_HOST_ALIAS = re.compile(r"^[a-z0-9_-]+$", re.IGNORECASE)
@@ -235,7 +234,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     ports_cached = False
 
-    rem_exec_ok = None
+    rem_python_ok = None
+    rem_ka_ok = None
+    rem_ka_expected_size = None
+    rem_ka_size = None
     rem_sys_name = None
 
     rem_conn_fp = None
@@ -307,24 +309,32 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             return True
         return False
 
-    def extract_rem_exec_ok_handler(self, line: str):
-        match = RGX_EXEC_PREFIX.search(line)
+    def extract_rem_ka_ok_handler(self, line: str):
+        match = RGX_KA_CHECK.search(line)
         if match:
-            self.rem_exec_ok = match.group(1) == "0"
-            self.ld(f"Remote SSHKernelApp status: {self.rem_exec_ok}")
+            self.rem_ka_ok = match.group(1) == "0"
+            self.ld(f"Remote SSHKernelApp status: {self.rem_ka_ok}")
             return True
         return False
 
-    def extract_rem_python_exec_ok_handler(self, line: str):
-        match = RGX_PYTHON_EXEC_PREFIX.search(line)
+    def extract_rem_ka_size_handler(self, line: str):
+        match = RGX_EXEC_SIZE.search(line)
         if match:
-            self.rem_python_exec_ok = match.group(1) == "0"
-            self.ld(f"Remote python executable status: {self.rem_python_exec_ok}")
+            self.rem_ka_size = int(match.group(1))
+            self.ld(f"Remote SSHKernelApp script size: {self.rem_ka_size}")
+            return True
+        return False
+
+    def extract_rem_python_ok_handler(self, line: str):
+        match = RGX_PY_CHECK.search(line)
+        if match:
+            self.rem_python_ok = match.group(1) == "0"
+            self.ld(f"Remote python executable status: {self.rem_python_ok}")
             return True
         return False
 
     def extract_rem_pid_ka_handler(self, line: str):
-        match = RGX_PID_KERNEL_APP.search(line)
+        match = RGX_PID_KA.search(line)
         if match:
             self.rem_pid_ka = int(match.group(1))
             self.li(f"Expected SSHKernelApp RPID={self.rem_pid_ka}")
@@ -360,13 +370,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.ld("Waiting to write remote script")
         cmd_str = " ".join(cmd)
         self.ld(f"{cmd_str = }")
-        self.rem_exec_ok = None  # reset
+        # Reset just in case, but it should not be needed, we only write the script once
+        self.rem_ka_ok = None  # reset
+        self.rem_python_ok = None  # reset
+        self.rem_ka_size = None  # reset
         try:
             future = self.extract_from_process_pipes(
                 process=process,
                 line_handlers=[
-                    self.extract_rem_python_exec_ok_handler,
-                    self.extract_rem_exec_ok_handler,
+                    self.extract_rem_python_ok_handler,
+                    self.extract_rem_ka_ok_handler,
+                    self.extract_rem_ka_size_handler,
                 ],
             )
             await asyncio.wait_for(future, timeout=self.launch_timeout)
@@ -375,22 +389,35 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.le(msg)
             raise RuntimeError(msg) from e
 
-        if not self.rem_python_exec_ok:
+        self.check_remote_script_status()
+        self.li("Remote SSHKernelApp script written")
+
+    def check_remote_script_status(self):
+        if not self.rem_python_ok:
             p = self.remote_python
             msg = f"Remote python '{p}' executable not found/readable/executable."
             self.le(msg)
             raise RuntimeError(msg)
+        expected_size = self.rem_ka_expected_size
+        if self.rem_ka_size is None:
+            msg = "Could not extract remote SSHKernelApp script size."
+            self.le(msg)
+            raise RuntimeError(msg)
+        elif self.rem_ka_size != expected_size:
+            msg = "Remote SSHKernelApp script has unexpected size "
+            msg += f"{self.rem_ka_size} bytes (vs {expected_size} bytes sent)."
+            self.le(msg)
+            raise RuntimeError(msg)
 
-        if not self.rem_exec_ok:
-            cmd = [*self.ssh_base, self.ssh_host_alias]  # type: ignore
+        if not self.rem_ka_ok:
+            cmd = [self.ssh, "-vvv", self.ssh_host_alias]  # type: ignore
             msg = (
-                "Writing the remote SSHKernelApp script failed. "
+                "Remote SSHKernelApp script not found/readable/executable. "
                 f"Check your SSH connection ({' '.join(cmd)}) and "
-                "the remote user's file permissions manually."
+                f"the remote {self.remote_script_dir} permissions."
             )
             self.le(msg)
             raise RuntimeError(msg)
-        self.li("Remote SSHKernelApp script written")
 
     async def extract_from_kernel_launch(
         self, process: subprocess.Popen, cmd: List[str]
@@ -405,6 +432,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         ```
         """
         self.rem_ready = False  # reset
+        self.rem_ka_size = None  # reset
+        self.rem_python_ok = None  # reset
+        self.rem_ka_ok = None  # reset
         self.ld("Waiting for remote connection file path from")
         cmd_str = " ".join(cmd)
         self.ld(f"{cmd_str = }")
@@ -413,7 +443,9 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 process=process,
                 line_handlers=[
                     self.extract_rem_sys_info_handler,
-                    self.extract_rem_exec_ok_handler,
+                    self.extract_rem_python_ok_handler,
+                    self.extract_rem_ka_ok_handler,
+                    self.extract_rem_ka_size_handler,
                     self.extract_rem_pid_ka_handler,
                     self.extract_rem_conn_fp_handler,
                     self.extract_rem_ready_handler,
@@ -426,18 +458,15 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             raise RuntimeError(msg) from e
 
         if not self.rem_sys_name:
-            cmd = [*self.ssh_base, self.ssh_host_alias]  # type: ignore
+            cmd = [self.ssh, "-vvv", self.ssh_host_alias]  # type: ignore
             msg = (
-                f"Check your SSH connection manually with '{' '.join(cmd)}'. "
-                "Could not extract remote system name."
+                "Could not extract remote system name. "
+                f"Check your SSH connection manually with '{' '.join(cmd)}'."
             )
             self.le(msg)
             raise RuntimeError(msg)
 
-        if not self.rem_exec_ok:
-            msg = "Remote SSHKernelApp not found/readable/executable."
-            self.le(msg)
-            raise RuntimeError(msg)
+        self.check_remote_script_status()
 
         if not self.rem_pid_ka:
             msg = "Could not extract PID of remote process"
@@ -463,11 +492,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             cmd = [
                 *self.ssh_base,
                 self.ssh_host_alias,
-                f"echo {PID_KERNEL_PREFIX}=$(pgrep -P {self.rem_pid_ka}); "
+                f"echo {PID_KERNEL}=$(pgrep -P {self.rem_pid_ka}); "
                 # print the connection file on a single line prefixed with a string
                 # so that we can parse it later
                 # ! `echo -n` is not supported on all systems, use `printf` instead.
-                + f"printf '{CONN_INFO_PREFIX}='; "
+                + f"printf '{CONN_INFO}='; "
                 # `r` string is raw string so that python does not interpret the `\`
                 + rf'cat "{self.rem_conn_fp}" | tr -d "\n" && echo ""',
             ]
@@ -488,7 +517,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             for line in lines:
                 if not line:
                     continue
-                match = RGX_CONN_INFO_PREFIX.search(line)
+                match = RGX_CONN_INFO.search(line)
                 if match:
                     self.rem_conn_info = json.loads(match.group(1))
                     self.ld(f"Connection info remote: {self.rem_conn_info}")
@@ -680,22 +709,22 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             f"{remote_script_fp!r}"
         )
         script = f"#!{self.remote_python}\n{KERNELAPP_PY}"
-        py_size = len(script.encode())
+        self.rem_ka_expected_size = len(script.encode())
         cmd = [
             REMOTE_INFO_LINE,
             # If the python executable is not correct `nohub` gives unrelated errors
             # like 'nohup: /.../sshpyk-kernel-v666a490b: No such file or directory'
             f'FP_PY="{self.remote_python}"',
             'test -e "$FP_PY" && test -r "$FP_PY" && test -x "$FP_PY"',
-            f'echo "{PYTHON_EXEC_PREFIX}=$?"',
+            f'echo "{PY_CHECK}=$?"',
             f'mkdir -p "{self.remote_script_dir}"',
             f'FP_KA="{remote_script_fp}"',
-            f'echo {KERNELAPP_FP_PREFIX}="$FP_KA"',
+            f'echo {KA_FP}="$FP_KA"',
             'cat > "$FP_KA"',
-            f'{PY_SIZE_PREFIX}=$(cat "$FP_KA" | wc -c | tr -d " ")',
-            f'echo "{PY_SIZE_PREFIX}=${PY_SIZE_PREFIX} ({py_size} sent)"',
+            f'{KA_SIZE}=$(cat "$FP_KA" | wc -c | tr -d " ")',
+            f'echo "{KA_SIZE}=${KA_SIZE} (expected {self.rem_ka_expected_size})"',
             'chmod 755 "$FP_KA"',
-            f'echo "{EXEC_PREFIX}=$?"',
+            f'echo "{KA_CHECK}=$?"',
         ]
         self.ld(f"Remote command {cmd = }")
         cmd = [*self.ssh_base, self.ssh_host_alias, "; ".join(cmd)]
@@ -870,13 +899,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             REMOTE_INFO_LINE,
             # Print `uname` of remote system
             f'echo "{UNAME_PREFIX}=$(uname -a)"',
+            f'FP_PY="{self.remote_python}"',
+            'test -e "$FP_PY" && test -r "$FP_PY" && test -x "$FP_PY"',
+            f'echo "{PY_CHECK}=$?"',
             f'FP_KA="{remote_script_fp}"',
-            f'echo {KERNELAPP_FP_PREFIX}="$FP_KA"',
+            f'echo {KA_FP}="$FP_KA"',
             'test -e "$FP_KA" && test -r "$FP_KA" && test -x "$FP_KA"',
-            f'echo "{EXEC_PREFIX}=$?"',
-            f'echo {PY_SIZE_PREFIX}=$(cat "$FP_KA" | wc -c | tr -d " ")',
+            f'echo "{KA_CHECK}=$?"',
+            f'{KA_SIZE}=$(cat "$FP_KA" | wc -c | tr -d " ")',
+            f'echo "{KA_SIZE}=${KA_SIZE} (expected {self.rem_ka_expected_size})"',  # noqa: E501
             # Print the PID of the remote SSHKernelApp process
-            f'echo "{PID_KERNEL_APP_PREFIX}=$$"',
+            f'echo "{PID_KA}=$$"',
             # Launch the SSHKernelApp
             f"exec nohup {cmd}",
         ]
