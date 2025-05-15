@@ -185,15 +185,17 @@ def validate_ssh_config(
         else:
             out["hostname"] = ("error", "Missing, must be set in the ssh config.")
 
+    # ! Don't make it an "error", otherwise the (last-resort) automated password-based
+    # ! authentications might not be possible. E.g. using `sshpass` + macOS Keychain.
     if "batchmode" in keys:
         bm = config.get("batchmode", None)
         if bm:
             if bm in ("yes", "true"):
                 out["batchmode"] = ("ok", bm)
             else:
-                out["batchmode"] = ("error", f"Must be 'yes', not {bm!r}.")
+                out["batchmode"] = ("warning", f"Recommended to be 'yes', not {bm!r}.")
         else:
-            out["batchmode"] = ("error", "Missing, must be 'yes'.")
+            out["batchmode"] = ("warning", "Missing, recommended to be 'yes'.")
 
     if "identityfile" in keys:
         id_file = config.get("identityfile", None)

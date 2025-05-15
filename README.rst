@@ -272,7 +272,7 @@ You can list all available kernels using the ``list`` command:
                             (x) identityfile: Likely missing in your ssh config. Multiple values: ['~/.ssh/id_rsa', '~/.ssh/id_ecdsa', '~/.ssh/id_ecdsa_sk', '~/.ssh/id_ed25519', '~/.ssh/id_ed25519_sk', '~/.ssh/id_xmss'].
                             (i) user: victor
                             (x) hostname: Likely missing in your ssh config. host='sshpyk_mbp' and hostname='sshpyk_mbp' must be different.
-                            (x) batchmode: Must be 'yes', not 'no'.
+                            (!) batchmode: Recommended to be 'yes', not 'no'.
                             (x) controlmaster: Must be 'auto', not 'false'.
                             (x) controlpersist: Must be, e.g., '10m' or 'yes', not 'no'.
                             (x) controlpath: Missing, use, e.g., '~/.ssh/sshpyk_%r@%h_%p'.
@@ -297,7 +297,7 @@ You can list all available kernels using the ``list`` command:
                             (x) identityfile: Likely missing in your ssh config. Multiple values: ['~/.ssh/id_rsa', '~/.ssh/id_ecdsa', '~/.ssh/id_ecdsa_sk', '~/.ssh/id_ed25519', '~/.ssh/id_ed25519_sk', '~/.ssh/id_xmss'].
                             (i) user: victor
                             (x) hostname: Likely missing in your ssh config. host='sshpyk_mbp_ext' and hostname='sshpyk_mbp_ext' must be different.
-                            (x) batchmode: Must be 'yes', not 'no'.
+                            (!) batchmode: Recommended to be 'yes', not 'no'.
                             (x) controlmaster: Must be 'auto', not 'false'.
                             (x) controlpersist: Must be, e.g., '10m' or 'yes', not 'no'.
                             (x) controlpath: Missing, use, e.g., '~/.ssh/sshpyk_%r@%h_%p'.
@@ -377,8 +377,11 @@ matches the wildcard (or simply a dedicated host alias as shown in `Quick start`
     # Required for automated login, see `Authentication via Private/Public Key`_
     # for more details
     IdentityFile ~/.ssh/private_key_for_remote_server # EDIT THIS
-    # BatchMode yes is required to prevent ssh from asking for interactive input.
+    # `BatchMode yes` prevents ssh from asking for interactive input.
     # E.g., when a password prompt is required for successful connection.
+    # You can skip it if you REALLY cannot use any alternative to password-based
+    # authentication. In such case, you have to automate the password prompt.
+    # Not recommended unless you know how to communicate the password securely.
     BatchMode yes
     # ##################################################################################
 
@@ -444,9 +447,9 @@ With this configuration, you can use ``remote_server_sshpyk`` as your ``--ssh-ho
   the ``remote_server_sshpyk`` as well, which might lead to unexpected behavior.
 
 ‼️ Important
-  ``ControlMaster: auto`` and ``BatchMode yes`` are mandatory for ``sshpyk`` to work.
+  ``ControlMaster: auto`` is mandatory for ``sshpyk`` to work.
   We highly recommend using the suggested ``ControlPersist``, ``ControlPath``,
-  ``ServerAliveInterval``, ``ServerAliveCountMax``, and ``TCPKeepAlive`` settings.
+  ``BatchMode yes``, ``ServerAliveInterval``, ``ServerAliveCountMax``, and ``TCPKeepAlive`` settings.
   This is to ensure that your SSH connection is stable and does not get dropped
   unexpectedly. With these settings your connection to the remote kernel should
   survive, e.g., losing your WiFi connection for a few minutes, and perhaps even
@@ -516,6 +519,8 @@ master SSH connection before attempting to start any ``sshpyk`` kernels:
   Host sshpyk_password_server
     HostName password.example.com
     User remote-username
+    # Skip `BatchMode yes` if you setup an automated password-based authentication.
+    # Not recommended unless you know how to communicate the password securely.
     BatchMode yes
     ControlMaster auto
     ControlPath ~/.ssh/sshpyk_%r@%h_%p
