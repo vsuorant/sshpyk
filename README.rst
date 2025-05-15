@@ -489,7 +489,7 @@ If the remote ``sshd`` is configured to specifically only allow password authent
 you can still use ``sshpyk`` by either:
 
 1. Changing the ``sshd`` configuration to allow private/public key-based authentication (ask your system administrator); or
-2. Manually establishing a master SSH connection first, as described in `Authentication via Password`_; or
+2. Manually establishing a master SSH connection before attempting to start any ``sshpyk`` kernels, as described in `Authentication via Password`_; or
 3. Spawning a ``sshd`` on the remote system on a custom port configured to allow private/public key-based authentication and following the instructions above.
 
 Authentication via Password
@@ -497,7 +497,7 @@ Authentication via Password
 
 If your remote host doesn't allow private/public key-based authentication and insists
 on password authentication, you can still use ``sshpyk`` by manually establishing a
-master SSH connection first:
+master SSH connection before attempting to start any ``sshpyk`` kernels:
 
 1. In your SSH config, set a long ``ControlPersist`` value (or ``ControlPersist=yes`` for an indefinite persistence) to avoid frequent manual password prompts:
 

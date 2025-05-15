@@ -275,7 +275,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         while process.poll() is None:
             # ! this is a blocking call when there are not lines to read, might become
             # ! an infinite loop waiting for output to read.
-            for line in process.stdout:
+            for line in process.stdout:  # type: ignore
                 line = line.strip()
                 if not line:
                     continue
@@ -384,13 +384,20 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 ],
             )
             await asyncio.wait_for(future, timeout=self.launch_timeout)
+            rc = process.returncode
+            if rc != 0:
+                cmd = [self.ssh, "-vvv", self.ssh_host_alias]  # type: ignore
+                msg = f"Failed to write the remote script, process exit code {rc}. "
+                msg += f"Check your SSH connection ({' '.join(cmd)})."
+                self.le(msg)
+                raise RuntimeError(msg)
         except TimeoutError as e:
             msg = f"Timed out waiting {self.launch_timeout}s to write the remote script"
             self.le(msg)
             raise RuntimeError(msg) from e
 
         self.check_remote_script_status()
-        self.li("Remote SSHKernelApp script written")
+        self.li("Remote SSHKernelApp script sent")
 
     def check_remote_script_status(self):
         if not self.rem_python_ok:
@@ -452,6 +459,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 ],
             )
             await asyncio.wait_for(future, timeout=self.launch_timeout)
+            rc = process.returncode
+            if rc != 0:
+                cmd = [self.ssh, "-vvv", self.ssh_host_alias]  # type: ignore
+                msg = f"Failed to launch the remote kernel, process exit code {rc}. "
+                msg += f"Check your SSH connection ({' '.join(cmd)})."
+                self.le(msg)
+                raise RuntimeError(msg)
         except TimeoutError as e:
             msg = f"Timed out waiting {self.launch_timeout}s for remote kernel launch."
             self.le(msg)
