@@ -68,6 +68,7 @@ See `Installation`_ for more details.
     HostName 192.168.1.100 # EDIT THIS
     User my_user_name_on_remote_server # EDIT THIS
     IdentityFile ~/.ssh/private_key_for_remote_server # EDIT THIS
+    BatchMode yes
     # WARNING: ControlMaster/ControlPath/ControlPersist are mandatory and should be
     # under a *DEDICATED* host alias, otherwise you will experience bad side effects
     ControlMaster auto # must be `auto`
@@ -376,6 +377,9 @@ matches the wildcard (or simply a dedicated host alias as shown in `Quick start`
     # Required for automated login, see `Authentication via Private/Public Key`_
     # for more details
     IdentityFile ~/.ssh/private_key_for_remote_server # EDIT THIS
+    # BatchMode yes is required to prevent ssh from asking for interactive input.
+    # E.g., when a password prompt is required for successful connection.
+    BatchMode yes
     # ##################################################################################
 
     # Connection stability:
@@ -440,10 +444,9 @@ With this configuration, you can use ``remote_server_sshpyk`` as your ``--ssh-ho
   the ``remote_server_sshpyk`` as well, which might lead to unexpected behavior.
 
 ‼️ Important
-  ``ControlMaster: auto`` is mandatory for ``sshpyk`` to work.
-  We highly recommend using the suggested ``ServerAliveInterval``,
-  ``ServerAliveCountMax``, ``TCPKeepAlive``, ``ControlPath``,
-  and ``ControlPersist`` settings.
+  ``ControlMaster: auto`` and ``BatchMode yes`` are mandatory for ``sshpyk`` to work.
+  We highly recommend using the suggested ``ControlPersist``, ``ControlPath``,
+  ``ServerAliveInterval``, ``ServerAliveCountMax``, and ``TCPKeepAlive`` settings.
   This is to ensure that your SSH connection is stable and does not get dropped
   unexpectedly. With these settings your connection to the remote kernel should
   survive, e.g., losing your WiFi connection for a few minutes, and perhaps even
@@ -480,6 +483,7 @@ Or manually add the contents of ``~/.ssh/private_key_for_remote_server.pub`` fro
     HostName some.remote.server.com
     User remote_username
     IdentityFile ~/.ssh/private_key_for_remote_server
+    BatchMode yes
     # ... the rest of the config as described in `Recommended SSH Config`
 
 4. Test your connection, you should connect without being prompted for a password:
@@ -512,6 +516,7 @@ master SSH connection before attempting to start any ``sshpyk`` kernels:
   Host sshpyk_password_server
     HostName password.example.com
     User remote-username
+    BatchMode yes
     ControlMaster auto
     ControlPath ~/.ssh/sshpyk_%r@%h_%p
     # Set a very long persistence time or ControlPersist=yes for indefinite persistence
@@ -555,12 +560,14 @@ For example in your SSH config you would add the following **dedicated** alias e
     HostName bastion.example.com
     User bastion-username
     IdentityFile ~/.ssh/id_rsa_bastion # required for automated login
+    BatchMode yes
     # ... the rest of the config as described in `Recommended SSH Config`
 
   Host sshpyk_internal_server
     HostName internal-server.example.com
     User remote-username
     IdentityFile ~/.ssh/id_rsa_internal # required for automated login
+    BatchMode yes
 
     ProxyJump sshpyk_bastion # this is the key line that enables the "jump" through the bastion
     # ... the rest of the config as described in `Recommended SSH Config`
@@ -734,16 +741,20 @@ To auto-format code, apply other small fixes (e.g. trailing whitespace) and to l
 Troubleshooting
 ===============
 
-If you are running into issues, try first to restart your system 😉.
+If you are running into issues, try first to restart your system(s) if possible 😉. Debugging SSH connections can be tricky.
 
-Make sure you can ``ssh remote_server_sshpyk "sleep 1 && exit"`` into your remote host without password prompts,
+Running the ``sshpyk list`` by default will check the remote kernels and the corresponding SSH connections (you can use ``--no-check`` to skip the remote kernel checks).
+Its output might already pinpoint the issue. You can pass a verbose ``sshpyk list -vvv`` flag to get more detailed logs (or just ``-v`` or ``-vv``).
+
+Make sure you can ``ssh -o BatchMode=no -vvv remote_server_sshpyk "sleep 1 && exit"`` into your remote host without password prompts,
 before attempting to launch the ``sshpyk`` kernel.
 
-To debug problems during kernel launch/shutdown/restart/etc., you can launch the sshpyk kernel manually with verbose logging:
+To debug problems during kernel launch/shutdown/restart/etc., you can launch the sshpyk kernel manually with verbose logging.
+Along with it, you can pass ``--ssh-verbose=vvv`` to get most verbose logging from the ``ssh`` commands that ``sshpyk`` invokes.
 
 .. code-block:: bash
 
-  sshpyk-kernel --kernel ssh_remote_python3 --debug
+  sshpyk-kernel --kernel ssh_remote_python3 --debug --ssh-verbose=vvv
 
 Read the logs, it will contain commands and output from the local/remote processes.
 You can open a new GitHub issue and share the output if you need help.
