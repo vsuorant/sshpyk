@@ -120,7 +120,7 @@ See `Recommended SSH Config`_ for more details.
 
 .. code-block:: bash
 
-  ssh remote_server_sshpyk
+  ssh -o BatchMode=no remote_server_sshpyk
 
 See `Authentication via Private/Public Key`_ for setting up SSH keys.
 If you are sure that the remote ``sshd`` does not allow authentication via private/public key see `Authentication via Password`_.
@@ -490,7 +490,7 @@ Or manually add the contents of ``~/.ssh/private_key_for_remote_server.pub`` fro
 
 .. code-block:: bash
 
-  ssh remote_server_sshpyk "sleep 1 && exit"
+  ssh -o BatchMode=no remote_server_sshpyk "echo CONNECTED"
 
 Alternatives to Private/Public Key Authentication
 -------------------------------------------------
@@ -746,7 +746,7 @@ If you are running into issues, try first to restart your system(s) if possible 
 Running the ``sshpyk list`` by default will check the remote kernels and the corresponding SSH connections (you can use ``--no-check`` to skip the remote kernel checks).
 Its output might already pinpoint the issue. You can pass a verbose ``sshpyk list -vvv`` flag to get more detailed logs (or just ``-v`` or ``-vv``).
 
-Make sure you can ``ssh -o BatchMode=no -vvv remote_server_sshpyk "sleep 1 && exit"`` into your remote host without password prompts,
+Make sure you can ``ssh -o BatchMode=no -vvv remote_server_sshpyk "echo CONNECTED"`` into your remote host without password prompts,
 before attempting to launch the ``sshpyk`` kernel.
 
 To debug problems during kernel launch/shutdown/restart/etc., you can launch the sshpyk kernel manually with verbose logging.
