@@ -71,7 +71,7 @@ See `Installation`_ for more details.
     # WARNING: ControlMaster/ControlPath/ControlPersist are mandatory and should be
     # under a *DEDICATED* host alias, otherwise you will experience bad side effects
     ControlMaster auto # must be `auto`
-    ControlPath ~/.ssh/sshpyk_%r@%h_%p # dir must exit!
+    ControlPath ~/.ssh/sshpyk_%r@%h_%p # dir must exist!
     ControlPersist 10m
     # Other recommended configurations
     StrictHostKeyChecking no
@@ -106,7 +106,7 @@ See `Installation`_ for more details.
       # WARNING: ControlMaster/ControlPath/ControlPersist are mandatory and should be
       # under a *DEDICATED* host alias, otherwise you will experience bad side effects
       ControlMaster auto # must be `auto`
-      ControlPath ~/.ssh/sshpyk_%r@%h_%p # dir must exit!
+      ControlPath ~/.ssh/sshpyk_%r@%h_%p # dir must exist!
       ControlPersist 10m
 
 With this config you can ssh into your remote as usual with ``remote_server`` for all
@@ -131,7 +131,7 @@ If you are sure that the remote ``sshd`` does not allow authentication via priva
   sshpyk add --ssh-host-alias remote_server_sshpyk \
               --kernel-name ssh_remote_python3 \
               --display-name "Remote Python 3.10" \
-              --remote-python-prefix /path/to/python/env \
+              --remote-python /path/to/python/env \
               --remote-kernel-name python3 \
               --language python
 
@@ -411,7 +411,7 @@ matches the wildcard (or simply a dedicated host alias as shown in `Quick start`
     # `auto` option is also essential for reusing an ssh connection established manually
     # e.g. when the remote host requires a password and explicitly forbids private key
     # authentication.
-    ControlMaster auto
+    ControlMaster auto # must be `auto`
     # The path to the control socket, this is used to manage the connection to the
     # remote server. Make sure to not use the same ControlPath for other host non-sshpyk
     # aliases! This is to avoid conflicts with other SSH connections and session to the
@@ -419,7 +419,7 @@ matches the wildcard (or simply a dedicated host alias as shown in `Quick start`
     # sessions might have unintended side effects.
     # Make sure the dirs on the path to the control socket exist, otherwise unrelated
     # errors might happen in sshpyk.
-    ControlPath ~/.ssh/sshpyk_%r@%h_%p
+    ControlPath ~/.ssh/sshpyk_%r@%h_%p # dir must exist!
     # Keep the master connection "warm" after the last time the SSH connection was used.
     # For connection stability and to speed up kernel restarts.
     # Note that there will be some SSH process on your local machine still running for
