@@ -762,15 +762,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 self.ld(msg)
         return socket_ok
 
-    async def check_control_sockets(self, attempt_open: bool = False):
+    async def check_control_sockets(self, raise_on_failed_open: bool = False):
         for host in self.all_hosts:
             if not isinstance(host, str):
                 raise RuntimeError(f"Invalid host alias: {host!r}")
             socket_ok = await self.has_control_socket(host)
 
             if socket_ok:
-                continue
-            if not attempt_open:
                 continue
 
             # Try to open the control socket (a few times) by verifying the connection.
@@ -800,6 +798,11 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 "Make sure you can connect manually (w/out any passwords) "
                 f"to {host!r}: '{' '.join(cmd)}'"
             )
+
+            if not raise_on_failed_open:
+                self.lw(msg)
+                continue
+
             self.le(msg)
             raise RuntimeError(msg)
 
@@ -874,7 +877,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # We only raise during a kernel launch (or connection) attempt and not on every
         # ssh command because the problem might be a temporary network connection issue
         # and not a problem with the ssh configuration.
-        await self.check_control_sockets(attempt_open=True)
+        await self.check_control_sockets(raise_on_failed_open=True)
 
         if not self.existing:
             await self.launch_remote_kernel()
