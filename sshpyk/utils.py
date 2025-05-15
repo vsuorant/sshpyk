@@ -109,6 +109,12 @@ def get_local_ssh_configs(
             log.error(msg)
             raise EnvironmentError(msg)
         config = parse_ssh_config(ret.stdout)
+
+        if "host" not in config:
+            # Some SSH versions (e.g. OpenSSH_9.0p1, LibreSSL 3.3.6 shipped with macOS)
+            # do not include the "host" key in the output of the "-G" option.
+            config["host"] = alias
+
         log.debug(f"{lp}Local SSH config for host alias {alias!r}: {config}")
         proxy_jump = config.get("proxyjump", None)
         if proxy_jump:
