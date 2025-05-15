@@ -232,19 +232,22 @@ You can list all available kernels using the ``list`` command:
   SSH Path:              (v) /opt/homebrew/bin/ssh
   SSH Host Alias:        sshpyk_mba
                             (i) user: victor
-                            (i) hostname: sshpyk_mba
-                            (v) identityfile: /Users/victor/.ssh/id_rsa_for_sshpyk
+                            (i) hostname: 192.168.238.4
+                            (v) batchmode: yes
+                            (v) identityfile: /Users/victor/.ssh/id_rsa_for_localhost
                             (v) controlmaster: auto
                             (v) controlpersist: 600
                             (v) controlpath: /Users/victor/.ssh/sshpyk_victor@192.168.238.4_22
                             (i) proxyjump: sshpyk_jump
   SSH Host Alias:        sshpyk_jump (jump)
                             (i) user: root
-                            (i) hostname: sshpyk_jump
+                            (i) hostname: 81.82.23.179
+                            (v) batchmode: yes
                             (v) identityfile: /Users/victor/.ssh/id_rsa_for_sshpyk_jump
                             (v) controlmaster: auto
                             (v) controlpersist: 600
                             (v) controlpath: /Users/victor/.ssh/sshpyk_root@81.82.23.179_53456
+  Remote Script Dir:     (v) $HOME/.ssh/sshpyk (/Users/victor/.ssh/sshpyk)
   SSH Connection:        (v) sshpyk_mba
   Remote System:         Darwin MacBook-Air 20.5.0 Darwin Kernel Version 20.5.0: Sat May  8 05:10:33 PDT 2021; root:xnu-7195.121.3~9/RELEASE_X86_64 x86_64
   Remote Interrupt Mode: signal
@@ -254,6 +257,8 @@ You can list all available kernels using the ``list`` command:
   Shutdown Timeout:      15
   Remote Command:        python -m ipykernel_launcher -f {connection_file}
 
+  29649 2025-05-15 17:16:58,306 ERROR    sshpyk.utils utils:309 verify_ssh_connection: [sshpyk_mbp stderr] ssh: Could not resolve hostname sshpyk_mbp: nodename nor servname provided, or not known
+  29649 2025-05-15 17:16:58,306 ERROR    sshpyk.utils utils:325 verify_ssh_connection: SSH connection to 'sshpyk_mbp' failed (exit code=255).
   ----- SSH Kernel -----
   Name:                  ssh_mbp_ext
   Display Name:          Python 3.13 (RMBP)
@@ -263,23 +268,22 @@ You can list all available kernels using the ``list`` command:
   Interrupt Mode:        (v) message
   SSH Path:              (v) /opt/homebrew/bin/ssh
   SSH Host Alias:        sshpyk_mbp
+                            (x) identityfile: Likely missing in your ssh config. Multiple values: ['~/.ssh/id_rsa', '~/.ssh/id_ecdsa', '~/.ssh/id_ecdsa_sk', '~/.ssh/id_ed25519', '~/.ssh/id_ed25519_sk', '~/.ssh/id_xmss'].
                             (i) user: victor
-                            (i) hostname: sshpyk_mbp
-                            (v) identityfile: /Users/victor/.ssh/id_rsa_for_sshpyk
-                            (x) controlmaster: Must be 'auto', not 'true'.
-                            (v) controlpersist: 600
-                            (v) controlpath: /Users/victor/.ssh/sshpyk_victor@192.168.238.2_22
-                            (!) proxycommand: ProxyCommand: ssh -W %h:%p sshpyk_jump, use ProxyJump instead.
-  SSH Connection:        (v) sshpyk_mbp
-  Remote System:         Darwin MacBook-Pro 22.6.0 Darwin Kernel Version 22.6.0: Thu Dec  5 23:40:09 PST 2024; root:xnu-8796.141.3.709.7~4/RELEASE_ARM64_T6000 arm64
-  Remote Interrupt Mode: signal
-  Remote Python:         (v) /opt/homebrew/anaconda3/envs/g/bin/python
-  Remote Kernel Name:    (v) python3
+                            (x) hostname: Likely missing in your ssh config. host='sshpyk_mbp' and hostname='sshpyk_mbp' must be different.
+                            (x) batchmode: Must be 'yes', not 'no'.
+                            (x) controlmaster: Must be 'auto', not 'false'.
+                            (x) controlpersist: Must be, e.g., '10m' or 'yes', not 'no'.
+                            (x) controlpath: Missing, use, e.g., '~/.ssh/sshpyk_%r@%h_%p'.
+  Remote Script Dir:     (?) $HOME/.ssh/sshpyk
+  SSH Connection:        (x) sshpyk_mbp
+  Remote Python:         (?) /opt/homebrew/anaconda3/envs/g/bin/python
+  Remote Kernel Name:    (?) python3
   Launch Timeout:        15
   Shutdown Timeout:      15
-  Remote Command:        python -m ipykernel_launcher -f {connection_file}
 
-  13400 2025-05-13 17:43:48,886 ERROR    sshpyk.utils utils:274 verify_ssh_connection: SSH connection to 'mbp_ext' failed: raw_output = ''
+  29649 2025-05-15 17:16:58,337 ERROR    sshpyk.utils utils:309 verify_ssh_connection: [sshpyk_mbp_ext stderr] ssh: Could not resolve hostname sshpyk_mbp_ext: nodename nor servname provided, or not known
+  29649 2025-05-15 17:16:58,337 ERROR    sshpyk.utils utils:325 verify_ssh_connection: SSH connection to 'sshpyk_mbp_ext' failed (exit code=255).
   ----- SSH Kernel -----
   Name:                  ssh_mbp_ext_broken
   Display Name:          Python 3.13 (RMBP Broken)
@@ -292,9 +296,11 @@ You can list all available kernels using the ``list`` command:
                             (x) identityfile: Likely missing in your ssh config. Multiple values: ['~/.ssh/id_rsa', '~/.ssh/id_ecdsa', '~/.ssh/id_ecdsa_sk', '~/.ssh/id_ed25519', '~/.ssh/id_ed25519_sk', '~/.ssh/id_xmss'].
                             (i) user: victor
                             (x) hostname: Likely missing in your ssh config. host='sshpyk_mbp_ext' and hostname='sshpyk_mbp_ext' must be different.
+                            (x) batchmode: Must be 'yes', not 'no'.
                             (x) controlmaster: Must be 'auto', not 'false'.
                             (x) controlpersist: Must be, e.g., '10m' or 'yes', not 'no'.
                             (x) controlpath: Missing, use, e.g., '~/.ssh/sshpyk_%r@%h_%p'.
+  Remote Script Dir:     (?) $HOME/.ssh/sshpyk
   SSH Connection:        (x) sshpyk_mbp_ext
   Remote Python:         (?) /opt/homebrew/anaconda3/envs/g/bin/python
   Remote Kernel Name:    (?) python3
