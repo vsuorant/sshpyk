@@ -62,6 +62,7 @@ def verify_local_ssh(
     log.debug(f"{lp}Verifying local {name} {cmd = }")
     ret = run(  # noqa: S603
         cmd,
+        stdin=PIPE,
         stdout=PIPE,
         stderr=STDOUT,  # at least OpenSSH outputs version to stderr
         text=True,
@@ -113,6 +114,7 @@ def get_local_ssh_configs(
         log.debug(f"{lp}Reading local SSH config for {alias!r}: {cmd = }")
         ret = run(  # noqa: S603
             cmd,
+            stdin=PIPE,
             capture_output=True,
             text=True,
             check=False,
@@ -359,6 +361,7 @@ def verify_rem_executable(
     log.debug(f"{lp}Verifying remote executable {fp!r} on {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
+        stdin=PIPE,
         capture_output=True,
         text=True,
         check=False,
@@ -391,6 +394,7 @@ def verify_rem_dir_exists(
     )
     ret = run(  # noqa: S603
         cmd,
+        stdin=PIPE,
         capture_output=True,
         text=True,
         check=False,
@@ -428,6 +432,7 @@ def fetch_remote_kernel_specs(
     log.debug(f"{lp}Fetching remote kernel specs from {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
+        stdin=PIPE,
         capture_output=True,
         text=True,
         check=False,
