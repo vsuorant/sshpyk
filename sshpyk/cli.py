@@ -13,6 +13,13 @@ from .utils import (
     DEFAULT_REMOTE_SCRIPT_DIR,
     LAUNCH_TIMEOUT,
     SHUTDOWN_TIME,
+    C,
+    E,
+    G,
+    M,
+    N,
+    R,
+    W,
     fetch_remote_kernel_specs,
     get_local_ssh_configs,
     validate_ssh_config,
@@ -30,15 +37,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 LOG_FORMAT = "%(process)6d %(asctime)s %(levelname)-8s %(name)s %(module)s:%(lineno)d %(funcName)s: %(message)s"  # noqa: E501
-
-# ANSI color codes for terminal output
-G = "\033[32m"  # Green
-R = "\033[31m"  # Red
-C = "\033[36m"  # Cyan
-M = "\033[35m"  # Magenta
-E = "\033[90m"  # Grey
-W = "\033[33m"  # Orange
-N = "\033[39m"  # Reset color only, not formatting
 
 
 K_NAME = "Name:"

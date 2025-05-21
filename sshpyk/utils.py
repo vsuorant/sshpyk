@@ -21,6 +21,15 @@ GET_ALL_SPECS_PY = inline_script(
 )
 
 
+# ANSI color codes for terminal output
+G = "\033[32m"  # Green
+R = "\033[31m"  # Red
+C = "\033[36m"  # Cyan
+M = "\033[35m"  # Magenta
+E = "\033[90m"  # Grey
+W = "\033[33m"  # Orange
+N = "\033[39m"  # Reset color only, not formatting
+
 LAUNCH_TIMEOUT = 15
 SHUTDOWN_TIME = 15
 UNAME_PREFIX = "UNAME_INFO_RESULT"
@@ -139,11 +148,7 @@ def get_local_ssh_configs(
     return hosts_configs
 
 
-def validate_ssh_config(
-    config: Dict[str, Union[str, List[str]]],
-    log: logging.Logger = logger,
-    lp: str = "",
-):
+def validate_ssh_config(config: Dict[str, Union[str, List[str]]]):
     out = {}
     keys = [
         "hostname",
@@ -284,21 +289,30 @@ def verify_ssh_connection(
     cmd = [*ssh, host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
     if verbose:
         cmd.insert(1, verbose)
-    log.debug(f"{lp}Verifying SSH connection to {host_alias!r}: {cmd = }")
-    ret = run(  # noqa: S603
-        cmd,
-        stdout=PIPE,
-        stderr=PIPE,
-        text=True,
-        check=False,
-        start_new_session=start_new_session,
-        universal_newlines=True,
-        timeout=timeout,
-    )  # type: ignore
+    log.debug(f"{E}{lp}{N}Verifying SSH connection to {host_alias!r}: {cmd = }")
+    if verbose:
+        log.info(f"{C}{lp}{N}cmd: {' '.join(cmd)}")
+    else:
+        log.debug(f"{E}{lp}{N}cmd: {' '.join(cmd)}")
+    uname = ""
+    try:
+        ret = run(  # noqa: S603
+            cmd,
+            stdout=PIPE,
+            stderr=PIPE,
+            stdin=PIPE,
+            text=True,
+            check=False,
+            start_new_session=start_new_session,
+            universal_newlines=True,
+            timeout=timeout,
+        )  # type: ignore
+    except Exception as e:
+        log.error(f"{R}{lp}{N}SSH connection to {host_alias!r} failed: {e}")
+        return False, uname
     stdout = ret.stdout.strip()
     stderr = ret.stderr.strip()
 
-    uname = ""
     ok = ret.returncode == 0
 
     for line in stderr.splitlines():
@@ -306,15 +320,15 @@ def verify_ssh_connection(
         if not line:
             continue
         if ok:
-            log.debug(f"{lp}[{host_alias} stderr] {line}")
+            log.debug(f"{E}{lp}{N}[{host_alias} stderr] {line}")
         else:
-            log.error(f"{lp}[{host_alias} stderr] {line}")
+            log.error(f"{R}{lp}{N}[{host_alias} stderr] {line}")
 
     for line in stdout.splitlines():
         line = line.strip()
         if not line:
             continue
-        log.debug(f"{lp}[{host_alias} stdout] {line}")
+        log.debug(f"{E}{lp}{N}[{host_alias} stdout] {line}")
         match = RGX_UNAME_PREFIX.search(line)
         if match:
             uname = match.group(1)
@@ -322,11 +336,11 @@ def verify_ssh_connection(
 
     ok = ok and bool(uname)
     if not ok:
-        msg = f"{lp}SSH connection to {host_alias!r} failed "
+        msg = f"{R}{lp}{N}SSH connection to {host_alias!r} failed "
         msg += f"(exit code={ret.returncode})."
         log.error(msg)
     else:
-        msg = f"{lp}SSH connection to {host_alias!r} succeeded: {uname = !r}."
+        msg = f"{E}{lp}{N}SSH connection to {host_alias!r} succeeded: {uname = !r}."
         log.debug(msg)
     return ok, uname
 

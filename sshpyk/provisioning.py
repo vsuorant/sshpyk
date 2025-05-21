@@ -16,7 +16,7 @@ from jupyter_client.connect import KernelConnectionInfo, LocalPortCache
 from jupyter_client.provisioning.provisioner_base import KernelProvisionerBase
 from jupyter_client.session import new_id_bytes
 from jupyter_core.paths import jupyter_runtime_dir, secure_write
-from traitlets import Bool, Integer, Unicode
+from traitlets import Bool, Integer, TraitError, Unicode
 from traitlets import Enum as EnumTrait
 
 from .kernelapp import EXISTING, PERSISTENT, PERSISTENT_FILE, SSH_VERBOSE
@@ -27,6 +27,12 @@ from .utils import (
     SHUTDOWN_TIME,
     SSHPYK_PERSISTENT_FP_BASE,
     UNAME_PREFIX,
+    C,
+    E,
+    G,
+    N,
+    R,
+    W,
     find_persistent_file,
     get_local_ssh_configs,
     validate_ssh_config,
@@ -94,14 +100,14 @@ class SshHost(Unicode):
         value = super().validate(obj, value)
         try:
             if not RGX_SSH_HOST_ALIAS.match(value):
-                raise ValueError(
+                raise TraitError(
                     f"Invalid SSH host alias {value!r}. "
                     f"Must match this pattern {RGX_SSH_HOST_ALIAS.pattern}. "
                     "Verify that it is defined in your local SSH config file."
                 )
             return value
-        except UnicodeEncodeError:
-            self.error(obj, value)
+        except Exception as e:
+            self.error(obj, value, e)
 
 
 class UnicodePath(Unicode):
@@ -110,21 +116,19 @@ class UnicodePath(Unicode):
         try:
             Path(value)  # should raise if not a valid path
             return value
-        except:  # noqa: E722
-            self.error(obj, value)
+        except Exception:
+            self.error(obj, value, ValueError(value, "a valid path"))
 
 
-class ExistingUnicodePath(Unicode):
+class MustExistUnicodePath(Unicode):
     def validate(self, obj, value):
         value = super().validate(obj, value)
-        try:
-            # should raise if not a valid path
-            p = Path(value).expanduser().resolve().absolute()
-            if not p.exists() or not p.is_file():
-                raise ValueError(f"Path {value!r} does not exist or is not a file.")
-            return str(p)
-        except:  # noqa: E722
-            self.error(obj, value)
+        # should raise if not a valid path
+        p = Path(value).expanduser().resolve().absolute()
+        if not p.exists() or not p.is_file():
+            msg = "a path to an existing ssh config file"
+            self.error(obj, value, ValueError(value, msg))
+        return str(p)
 
 
 class UnicodeAbsolutePath(Unicode):
@@ -133,10 +137,10 @@ class UnicodeAbsolutePath(Unicode):
         try:
             p = Path(value)  # should raise if not a valid path
             if not p.is_absolute():
-                raise ValueError(f"Path {value!r} is not absolute.")
+                raise ValueError()
             return value
-        except:  # noqa: E722
-            self.error(obj, value)
+        except Exception:
+            self.error(obj, value, ValueError(value, "an absolute path"))
 
 
 class KernelName(Unicode):
@@ -144,10 +148,10 @@ class KernelName(Unicode):
         # value = super().validate(obj, value) # not needed since we use regex
         try:
             if not RGX_KERNEL_NAME.match(value):
-                raise ValueError(f"Invalid kernel name {value!r}")
+                raise ValueError()
             return value
-        except:  # noqa: E722
-            self.error(obj, value)
+        except Exception:
+            self.error(obj, value, ValueError(value, "a valid kernel name"))
 
 
 LOG_NAME = "SSHPYK"
@@ -167,7 +171,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         "It must be defined in your local SSH config file.",
         allow_none=False,
     )
-    ssh_config = ExistingUnicodePath(
+    ssh_config = MustExistUnicodePath(
         config=True,
         help="Path to the SSH config file to use. "
         "If not provided, the SSH executable's default config file will be used.",
@@ -271,24 +275,24 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     rem_proc_cmds = None
 
     def li(self, msg: str, *args, **kwargs):
-        self.log.info(f"{self.log_prefix}{msg}", *args, **kwargs)
+        self.log.info(f"{G}{self.log_prefix}{N}{msg}", *args, **kwargs)
 
     def ld(self, msg: str, *args, **kwargs):
-        self.log.debug(f"{self.log_prefix}{msg}", *args, **kwargs)
+        self.log.debug(f"{E}{self.log_prefix}{N}{msg}", *args, **kwargs)
 
     def lw(self, msg: str, *args, **kwargs):
-        self.log.warning(f"{self.log_prefix}{msg}", *args, **kwargs)
+        self.log.warning(f"{W}{self.log_prefix}{N}{msg}", *args, **kwargs)
 
     def le(self, msg: str, *args, **kwargs):
-        self.log.error(f"{self.log_prefix}{msg}", *args, **kwargs)
+        self.log.error(f"{R}{self.log_prefix}{N}{msg}", *args, **kwargs)
 
     def ls(self, msg: str = "", cmd: Optional[List[str]] = None, *args, **kwargs):
         """A shortcut to log at the info level if ssh_verbose is enabled."""
         cmd_str = f"cmd: {' '.join(cmd)}" if cmd else ""
         if self.ssh_verbose:
-            self.log.info(f"{self.log_prefix}{cmd_str}{msg}", *args, **kwargs)
+            self.log.info(f"{C}{self.log_prefix}{N}{cmd_str}{N}{msg}", *args, **kwargs)
         else:
-            self.log.debug(f"{self.log_prefix}{cmd_str}{msg}", *args, **kwargs)
+            self.log.debug(f"{E}{self.log_prefix}{N}{cmd_str}{N}{msg}", *args, **kwargs)
 
     async def extract_from_process_pipes(
         self, process: subprocess.Popen, line_handlers: List[Callable[[str], bool]]
@@ -676,7 +680,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # BatchMode is expected to be set to 'yes' in the config, must be overridden
         # otherwise it is hard to figure out if some interactive input is required.
         # That can happen when, e.g., a password prompt is required.
-        self.ssh_base_help = [self.ssh, "-vvv", " -o", "BatchMode=no"]
+        self.ssh_base_help = [self.ssh, "-vvv", "-o", "BatchMode=no"]
 
         if self.ssh_verbose:
             arg = f"-{self.ssh_verbose}"
@@ -699,7 +703,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     def pre_launch_init(self):
         """Initialize the provisioner on the first launch."""
-
         # ! REMINDER: this method is NOT called on kernel restarts.
 
         # Initialize locks, these are used to avoid race conditions
@@ -759,7 +762,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ssh_base, alias=self.ssh_host_alias, log=self.log, lp=self.log_prefix
         )
         for config in configs:
-            valid = validate_ssh_config(config, log=self.log, lp=self.log_prefix)
+            valid = validate_ssh_config(config)
             host = config["host"]
             for k, v in valid.items():
                 self.li(f"[Local ssh config for '{host}'] {k}: {v}")

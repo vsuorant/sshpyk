@@ -150,11 +150,13 @@ class SSHKernelApp(JupyterApp):
             data = os.read(fd, 1)
             if not data:  # EOF detected
                 self.log.info("Received EOF (Ctrl+D)")
+                magenta = "\033[35m"  # Magenta
+                reset = "\033[39m"  # Reset color only, not formatting
                 sys.stdout.write(
-                    "Pick an action and press Enter: "
+                    f"{magenta}Pick an action and press Enter: "
                     "Y = shutdown (default), i = interrupt, "
                     "l = leave w/out kernel shutdown, r = restart, n = nothing"
-                    "\nAction? [Y/i/l/r/n]: "
+                    f"\nAction? [Y/i/l/r/n]:{reset} "
                 )
                 sys.stdout.flush()
 
