@@ -114,6 +114,19 @@ class UnicodePath(Unicode):
             self.error(obj, value)
 
 
+class ExistingUnicodePath(Unicode):
+    def validate(self, obj, value):
+        value = super().validate(obj, value)
+        try:
+            # should raise if not a valid path
+            p = Path(value).expanduser().resolve().absolute()
+            if not p.exists() or not p.is_file():
+                raise ValueError(f"Path {value!r} does not exist or is not a file.")
+            return str(p)
+        except:  # noqa: E722
+            self.error(obj, value)
+
+
 class UnicodeAbsolutePath(Unicode):
     def validate(self, obj, value):
         value = super().validate(obj, value)
@@ -153,6 +166,13 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         help="Remote host alias to connect to. "
         "It must be defined in your local SSH config file.",
         allow_none=False,
+    )
+    ssh_config = ExistingUnicodePath(
+        config=True,
+        help="Path to the SSH config file to use. "
+        "If not provided, the SSH executable's default config file will be used.",
+        allow_none=True,
+        default_value=None,
     )
     remote_python = UnicodeAbsolutePath(
         config=True,
@@ -261,6 +281,14 @@ class SSHKernelProvisioner(KernelProvisionerBase):
 
     def le(self, msg: str, *args, **kwargs):
         self.log.error(f"{self.log_prefix}{msg}", *args, **kwargs)
+
+    def ls(self, msg: str = "", cmd: Optional[List[str]] = None, *args, **kwargs):
+        """A shortcut to log at the info level if ssh_verbose is enabled."""
+        cmd_str = f"cmd: {' '.join(cmd)}" if cmd else ""
+        if self.ssh_verbose:
+            self.log.info(f"{self.log_prefix}{cmd_str}{msg}", *args, **kwargs)
+        else:
+            self.log.debug(f"{self.log_prefix}{cmd_str}{msg}", *args, **kwargs)
 
     async def extract_from_process_pipes(
         self, process: subprocess.Popen, line_handlers: List[Callable[[str], bool]]
@@ -524,6 +552,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 + rf'cat "{self.rem_conn_fp}" | tr -d "\n" && echo ""',
             ]
             self.ld(f"Fetching remote connection file/kernel PID {cmd = }")
+            self.ls(cmd=cmd)
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -638,6 +667,36 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             km.load_connection_file(cf)  # type: ignore
             self.cf_loaded = True
 
+    def make_base_ssh_command(self):
+        if not self.ssh:
+            raise RuntimeError(f"Unexpected {self.ssh = }")
+
+        self.ssh_base = [self.ssh]
+
+        # BatchMode is expected to be set to 'yes' in the config, must be overridden
+        # otherwise it is hard to figure out if some interactive input is required.
+        # That can happen when, e.g., a password prompt is required.
+        self.ssh_base_help = [self.ssh, "-vvv", " -o", "BatchMode=no"]
+
+        if self.ssh_verbose:
+            arg = f"-{self.ssh_verbose}"
+            self.ld(f"SSH verbose level: {arg}")
+            self.ssh_base.append(arg)
+
+        if self.ssh_config:
+            fp = Path(self.ssh_config).resolve()
+            if not fp.is_file():
+                raise RuntimeError(
+                    f"SSH config file {fp} does not exit! "
+                    "Create the file or edit your sshpyk kernel."
+                )
+            self.ssh_base += ["-F", self.ssh_config]
+            # Quote the path to avoid issues with spaces in the path if the user runs
+            # the command from a shell.
+            self.ssh_base_help += ["-F", f"'{self.ssh_config}'"]
+
+        self.li(f"Base local ssh command: {' '.join(self.ssh_base)}")
+
     def pre_launch_init(self):
         """Initialize the provisioner on the first launch."""
 
@@ -693,26 +752,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.ssh = verify_local_ssh(
             self.ssh, log=self.log, name="ssh", lp=self.log_prefix
         )
-        if self.ssh_verbose:
-            arg = f"-{self.ssh_verbose}"
-            self.ld(f"SSH verbose level: {arg}")
-            self.ssh_base = [self.ssh, arg]
-        else:
-            self.ssh_base = [self.ssh]
 
-        # BatchMode is expected to be set to 'yes' in the config, must be overridden
-        # otherwise it is hard to figure out if some interactive input is required.
-        # That can happen when, e.g., a password prompt is required.
-        self.ssh_base_help = [self.ssh, "-o", "BatchMode=no", "-vvv"]
+        self.make_base_ssh_command()
 
         configs = get_local_ssh_configs(
-            self.ssh, alias=self.ssh_host_alias, log=self.log, lp=self.log_prefix
+            self.ssh_base, alias=self.ssh_host_alias, log=self.log, lp=self.log_prefix
         )
         for config in configs:
             valid = validate_ssh_config(config, log=self.log, lp=self.log_prefix)
             host = config["host"]
             for k, v in valid.items():
-                self.li(f"{self.log_prefix}[Local ssh config for '{host}'] {k}: {v}")
+                self.li(f"[Local ssh config for '{host}'] {k}: {v}")
             for k, (v, msg) in valid.items():
                 if v == "error":
                     raise RuntimeError(
@@ -732,6 +782,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     async def has_control_socket(self, alias: str, log_error: bool = False):
         cmd = [*self.ssh_base, "-O", "check", alias]
         self.ld(f"Checking local control socket for '{alias}': {cmd = }")
+        self.ls(cmd=cmd)
         process = subprocess.Popen(  # noqa: S603
             cmd,
             stdout=subprocess.PIPE,
@@ -777,7 +828,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             ok = False
             for _ in range(3):
                 ok, _ = verify_ssh_connection(
-                    ssh=self.ssh,  # type: ignore
+                    ssh=self.ssh_base,
                     host_alias=host,
                     log=self.log,
                     lp=self.log_prefix,
@@ -840,6 +891,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.ld(f"Remote command {cmd = }")
         cmd = [*self.ssh_base, self.ssh_host_alias, "; ".join(cmd)]
         self.ld(f"Local command {cmd = }")
+        self.ls(cmd=cmd)
         process = subprocess.Popen(  # noqa: S603
             cmd,
             stdout=subprocess.PIPE,
@@ -962,7 +1014,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # Better to not interfere with the launch of the remote kernel. Let it take
             # care of everything as configured on the remote system.
             # f"--KernelManager.connection_file='{self.rem_conn_fp}'",
-            # to allow users seeing the logs of the remote SSHKernelApp when enabling
+            # Allow users to see the logs of the remote SSHKernelApp when enabling
             # the local `--debug`.
             "--debug",
         ]
@@ -1041,7 +1093,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             cmd,
         ]
         self.ld(f"Local command {cmd = }")
-
+        self.ls(cmd=cmd)
         # The way the processes are spawned is very important.
         # See launch_kernel() source code in jupyter_client for details.
         process = subprocess.Popen(  # noqa: S603
@@ -1124,7 +1176,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             *self.kernel_tunnels_args,  # ssh tunnels within the same command
             alias,
         ]
-        self.ld(f"Periodic kernel tunnels check cmd_str = '{' '.join(cmd)}'")
+        self.ld(f"Periodic kernel tunnels check {cmd = }")
+        self.ls(cmd=cmd)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=subprocess.PIPE,
@@ -1181,6 +1234,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.ssh_host_alias,
         ]
         self.ld(f"Closing tunnels {cmd = }")
+        self.ls(cmd=cmd)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=subprocess.PIPE,
@@ -1480,6 +1534,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         ]
         # * Don't log, it is called too often.
         # // self.ld(f"Checking remote processes state {cmd = }")
+        # // self.ls(cmd=cmd)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -1688,6 +1743,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         try:
             await self.check_control_sockets()
             cmd = [*self.ssh_base, self.ssh_host_alias, f"kill -{signum} {pid}"]
+            self.ld(f"Sending signal {signum} to remote process, RPID={pid}, {cmd = }")
+            self.ls(cmd=cmd)
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,

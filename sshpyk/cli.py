@@ -50,6 +50,7 @@ K_CMDS = "Command (simplified):"
 K_LANG = "Language:"
 K_SSH = "SSH Host Alias:"
 K_CONN = "SSH Connection:"
+K_SSH_CONFIG = "SSH Config File:"
 K_SSH_PATH = "SSH Path:"
 K_EXE = "Remote Python:"
 K_RKER = "Remote Kernel Name:"
@@ -63,11 +64,14 @@ K_RRES = "Remote Resource Dir:"
 K_RUNAME = "Remote System:"
 K_RSD = "Remote Script Dir:"
 
+DEFAULT_SSH_CONFIG_PATH = str(Path.home() / ".ssh" / "config")
+
 ALL_KEYS = [
     K_NAME,
     K_DISP,
     K_RES,
     K_SPEC,
+    K_SSH_CONFIG,
     K_CMD,
     K_CMDS,
     K_LANG,
@@ -184,6 +188,7 @@ def extract_ssh_kernel_info(
         "shutdown_timeout": config.get("shutdown_timeout", SHUTDOWN_TIME),
         "interrupt_mode": interrupt_mode,
         "ssh": config.get("ssh", None),
+        "ssh_config": config.get("ssh_config", None),
         "remote_script_dir": config.get("remote_script_dir", DEFAULT_REMOTE_SCRIPT_DIR),
     }
 
@@ -226,11 +231,13 @@ def print_ssh_kernels(ssh_kernels, skip_checks):
         print("\n".join(k_lines), end="\n\n")
 
 
-def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
+def perform_kernel_checks(kernel: dict, skip_checks: bool, remote_specs_cache: dict):
     """Perform sanity checks on SSH kernel configuration."""
     results = {
         "remote_cmd": "",
         "ssh_path": "",
+        "ssh_config": kernel.get("ssh_config", None),
+        "ssh_config_ok": None,
         "ssh_ok": None,
         "exec_ok": None,
         "kernel_ok": None,
@@ -242,25 +249,46 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
         "rsd_ok": None,
         "script_dir": None,  # as echoed on remote
     }
+    ssh_cmds = []
     try:
         ssh_bin = verify_local_ssh(kernel.get("ssh", None), name="ssh")
         results["ssh_path"] = ssh_bin
         results["ssh_exec_ok"] = ssh_bin is not None
+        if ssh_bin:
+            ssh_cmds += [ssh_bin]
     except Exception as e:
+        ssh_bin = None
         results["ssh_exec_ok"] = False
         logger.error(f"Error verifying local ssh: {e}")
 
+    ssh_config = results["ssh_config"]
+    if ssh_config:
+        try:
+            p = Path(ssh_config).expanduser().resolve().absolute()
+            results["ssh_config"] = ssh_config = str(p)
+            if not p.is_file():
+                raise FileNotFoundError(f"SSH config file {p!r} not found")
+            ssh_cmds += ["-F", ssh_config]
+        except Exception as e:
+            msg = f"Invalid SSH config file {ssh_config!r} for {kernel['name']}: {e}"
+            logger.error(msg)
+            results["ssh_config_ok"] = False
+        else:
+            results["ssh_config_ok"] = True
+    else:
+        results["ssh_config_ok"] = True
+
     if ssh_bin:
-        configs = get_local_ssh_configs(ssh_bin, kernel["host"])
+        configs = get_local_ssh_configs(ssh_cmds, kernel["host"])
         results["ssh_configs_val"] = {
             config["host"]: validate_ssh_config(config) for config in configs
         }
 
-    if skip_checks:
+    if skip_checks or not ssh_bin:
         return results
 
     try:
-        ssh_ok, uname = verify_ssh_connection(ssh_bin, kernel["host"])
+        ssh_ok, uname = verify_ssh_connection(ssh_cmds, kernel["host"])
         if not ssh_ok:
             results["ssh_ok"] = False
             return results
@@ -271,7 +299,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
             results["ssh_ok"] = True
 
             exec_ok = verify_rem_executable(
-                ssh_bin,
+                ssh_cmds,
                 kernel["host"],
                 kernel["remote_python"],
             )
@@ -279,7 +307,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
 
             # Check remote script directory exists
             rsd_ok, rsd_dir = verify_rem_dir_exists(
-                ssh_bin,
+                ssh_cmds,
                 kernel["host"],
                 kernel["remote_script_dir"],
             )
@@ -288,7 +316,7 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
 
             # Check remote kernel exists
             remote_specs = get_remote_kernel_specs(
-                ssh_bin,
+                ssh_cmds,
                 kernel["host"],
                 kernel["remote_python"],
                 remote_specs_cache,
@@ -312,12 +340,12 @@ def perform_kernel_checks(kernel, skip_checks, remote_specs_cache):
     return results
 
 
-def get_remote_kernel_specs(ssh_bin, host, remote_python, remote_specs_cache):
+def get_remote_kernel_specs(ssh, host, remote_python, remote_specs_cache):
     """Get remote kernel specifications, using cache if available."""
     if host not in remote_specs_cache:
         try:
             remote_specs_cache[host] = fetch_remote_kernel_specs(
-                ssh_bin,
+                ssh,
                 host,
                 remote_python,
             )
@@ -347,6 +375,11 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
 
     c = format_check(check_res["ssh_exec_ok"])
     k_lines.append(f"{C}{K_SSH_PATH:<{K_LEN}}{N} {c} {check_res['ssh_path']}")
+
+    if kernel["ssh_config"]:
+        value = f"{kernel['ssh_config']} ({check_res['ssh_config']})"
+        c = format_check(check_res["ssh_config_ok"])
+        k_lines.append(f"{C}{K_SSH_CONFIG:<{K_LEN}}{N} {c} {value}")
 
     host_prefix = ""
     for host, val in check_res["ssh_configs_val"].items():
@@ -443,12 +476,21 @@ def add_kernel(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
+    if args.ssh_config:
+        p = Path(args.ssh_config).expanduser().resolve()
+        if not p.is_file():
+            print(f"Error: SSH config file {p!r} not found")
+            sys.exit(1)
+
     # Create kernel spec
     config = {
         "ssh": args.ssh or None,
         "ssh_host_alias": args.ssh_host_alias,
         "remote_python": args.remote_python,
         "remote_kernel_name": args.remote_kernel_name,
+        # Users are allowed to remove it from the kernel spec file but by default set it
+        # explicitly to the default SSH config path.
+        "ssh_config": args.ssh_config or DEFAULT_SSH_CONFIG_PATH,
     }
     if args.launch_timeout:
         config["launch_timeout"] = args.launch_timeout
@@ -630,6 +672,14 @@ def main() -> None:
         "config file.",
     )
     add_parser.add_argument(
+        "--ssh-config",
+        required=False,
+        default=DEFAULT_SSH_CONFIG_PATH,
+        help=f"Path to the local SSH config file to be used when starting a connection "
+        f"for this Kernel. The configuration file must define the configuration of the "
+        f"host alias. (default: {DEFAULT_SSH_CONFIG_PATH})",
+    )
+    add_parser.add_argument(
         "--remote-python",
         required=True,
         help="Path to the Python executable on the remote system. Run `which python` "
@@ -686,6 +736,14 @@ def main() -> None:
         "--ssh-host-alias",
         help="Remote host alias to connect to. It must be defined in your local SSH "
         "config file.",
+    )
+    edit_parser.add_argument(
+        "--ssh-config",
+        required=False,
+        default=DEFAULT_SSH_CONFIG_PATH,
+        help=f"Path to the local SSH config file to be used when starting a connection "
+        f"for this Kernel. The configuration file must define the configuration of the "
+        f"host alias. (default: {DEFAULT_SSH_CONFIG_PATH})",
     )
     edit_parser.add_argument(
         "--remote-python",

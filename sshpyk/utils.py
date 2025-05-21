@@ -89,7 +89,7 @@ def parse_ssh_config(config: str):
 
 
 def get_local_ssh_configs(
-    ssh: str,
+    ssh: List[str],
     alias: str,
     log: logging.Logger = logger,
     lp: str = "",
@@ -100,7 +100,7 @@ def get_local_ssh_configs(
     while aliases:
         alias = aliases.pop(0)
         # ! for non-defined aliases, it will still dump a config based on defaults
-        cmd = [ssh, "-G", alias]  # dumps all configs for the alias
+        cmd = [*ssh, "-G", alias]  # dumps all configs for the alias
         log.debug(f"{lp}Reading local SSH config for {alias!r}: {cmd = }")
         ret = run(  # noqa: S603
             cmd,
@@ -272,7 +272,7 @@ def validate_ssh_config(
 
 
 def verify_ssh_connection(
-    ssh: str,
+    ssh: List[str],
     host_alias: str,
     verbose: Optional[str] = None,
     log: logging.Logger = logger,
@@ -281,7 +281,7 @@ def verify_ssh_connection(
     timeout: Optional[int] = LAUNCH_TIMEOUT,
 ):
     """Verify that the SSH connection to the remote host is working."""
-    cmd = [ssh, host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
+    cmd = [*ssh, host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
     if verbose:
         cmd.insert(1, verbose)
     log.debug(f"{lp}Verifying SSH connection to {host_alias!r}: {cmd = }")
@@ -332,7 +332,7 @@ def verify_ssh_connection(
 
 
 def verify_rem_executable(
-    ssh: str,
+    ssh: List[str],
     host_alias: str,
     fp: str,
     log: logging.Logger = logger,
@@ -341,7 +341,7 @@ def verify_rem_executable(
 ):
     """Verify that the remote executable exists and is executable."""
     # NB the quotes around filename are mandatory and safer
-    cmd = [ssh, host_alias, f'test -e "{fp}" && test -r "{fp}" && test -x "{fp}"']
+    cmd = [*ssh, host_alias, f'test -e "{fp}" && test -r "{fp}" && test -x "{fp}"']
     log.debug(f"{lp}Verifying remote executable {fp!r} on {host_alias!r}: {cmd = }")
     ret = run(  # noqa: S603
         cmd,
@@ -362,7 +362,7 @@ def verify_rem_executable(
 
 
 def verify_rem_dir_exists(
-    ssh: str,
+    ssh: List[str],
     host_alias: str,
     dir_path: str,
     log: logging.Logger = logger,
@@ -371,7 +371,7 @@ def verify_rem_dir_exists(
 ) -> Tuple[bool, str]:
     """Verify that the remote directory exists."""
     # NB the quotes around dir_path are mandatory and safer
-    cmd = [ssh, host_alias, f'echo "{dir_path}" && test -d "{dir_path}"']
+    cmd = [*ssh, host_alias, f'echo "{dir_path}" && test -d "{dir_path}"']
     log.debug(
         f"{lp}Verifying remote directory {dir_path!r} on {host_alias!r}: {cmd = }"
     )
@@ -394,7 +394,7 @@ def verify_rem_dir_exists(
 
 
 def fetch_remote_kernel_specs(
-    ssh: str,
+    ssh: List[str],
     host_alias: str,
     python: str,
     log: logging.Logger = logger,
@@ -406,7 +406,7 @@ def fetch_remote_kernel_specs(
     Returns a dictionary of kernel specs from the remote system.
     """
     cmd = [
-        ssh,
+        *ssh,
         host_alias,
         # ! `echo -n` is not supported on all systems, use `printf` instead.
         f"printf '{GET_SPECS_PREFIX}=' && {python} -c '{GET_ALL_SPECS_PY}'",
