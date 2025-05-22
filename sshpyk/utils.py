@@ -109,7 +109,8 @@ def get_local_ssh_configs(
         alias = aliases.pop(0)
         # ! for non-defined aliases, it will still dump a config based on defaults
         cmd = [*ssh, "-G", alias]  # dumps all configs for the alias
-        log.debug(f"{lp}Reading local SSH config for {alias!r}: {cmd = }")
+        log.debug(f"{lp}Reading local SSH config for {alias!r}")
+        log.debug(f"{C}{lp}{N}cmd: {' '.join(cmd)}")
         ret = run(  # noqa: S603
             cmd,
             stdin=PIPE,
@@ -289,11 +290,11 @@ def verify_ssh_connection(
     cmd = [*ssh, host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
     if verbose:
         cmd.insert(1, verbose)
-    log.debug(f"{E}{lp}{N}Verifying SSH connection to {host_alias!r}: {cmd = }")
+    log.debug(f"{E}{lp}{N}Verifying SSH connection to {host_alias!r}")
     if verbose:
         log.info(f"{C}{lp}{N}cmd: {' '.join(cmd)}")
     else:
-        log.debug(f"{E}{lp}{N}cmd: {' '.join(cmd)}")
+        log.debug(f"{C}{lp}{N}cmd: {' '.join(cmd)}")
     uname = ""
     try:
         ret = run(  # noqa: S603

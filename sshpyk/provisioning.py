@@ -930,7 +930,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # Launch the SSHKernelApp
             f"exec nohup $FP_PY -c 'import sys; {msg}; exec(sys.stdin.read())'",
         ]
-        await self.check_control_sockets()
+        # We already checked in `pre_launch()`
+        # // await self.check_control_sockets()
         cmd = "; ".join(cmd_parts)
         self.ld(f"Remote command {cmd = }")
         cmd = [
