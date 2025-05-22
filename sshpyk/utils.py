@@ -45,7 +45,7 @@ def verify_local_ssh(
     log: logging.Logger = logger,
     name: str = "ssh",
     lp: str = "",
-    timeout: Optional[int] = LAUNCH_TIMEOUT,
+    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
 ) -> str:
     """Verify that the local SSH is working."""
     if not ssh:
@@ -101,7 +101,7 @@ def get_local_ssh_configs(
     alias: str,
     log: logging.Logger = logger,
     lp: str = "",
-    timeout: Optional[int] = LAUNCH_TIMEOUT,
+    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
 ) -> List[Dict[str, Union[str, List[str]]]]:
     aliases = [alias]
     hosts_configs = []
@@ -284,7 +284,7 @@ def verify_ssh_connection(
     log: logging.Logger = logger,
     lp: str = "",
     start_new_session: bool = False,
-    timeout: Optional[int] = LAUNCH_TIMEOUT,
+    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
 ):
     """Verify that the SSH connection to the remote host is working."""
     cmd = [*ssh, host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
@@ -352,7 +352,7 @@ def verify_rem_executable(
     fp: str,
     log: logging.Logger = logger,
     lp: str = "",
-    timeout: Optional[int] = LAUNCH_TIMEOUT,
+    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
 ):
     """Verify that the remote executable exists and is executable."""
     # NB the quotes around filename are mandatory and safer
@@ -383,7 +383,7 @@ def verify_rem_dir_exists(
     dir_path: str,
     log: logging.Logger = logger,
     lp: str = "",
-    timeout: Optional[int] = LAUNCH_TIMEOUT,
+    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
 ) -> Tuple[bool, str]:
     """Verify that the remote directory exists."""
     # NB the quotes around dir_path are mandatory and safer
@@ -416,7 +416,7 @@ def fetch_remote_kernel_specs(
     python: str,
     log: logging.Logger = logger,
     lp: str = "",
-    timeout: Optional[int] = LAUNCH_TIMEOUT,
+    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
 ) -> dict:
     """
     Fetch kernel specifications from the remote host using SSH.
