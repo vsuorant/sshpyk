@@ -292,7 +292,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         if self.ssh_verbose:
             self.log.info(f"{C}{self.log_prefix}{N}{cmd_str}{N}{msg}", *args, **kwargs)
         else:
-            self.log.debug(f"{E}{self.log_prefix}{N}{cmd_str}{N}{msg}", *args, **kwargs)
+            self.log.debug(f"{C}{self.log_prefix}{N}{cmd_str}{N}{msg}", *args, **kwargs)
 
     async def extract_from_process_pipes(
         self, process: subprocess.Popen, line_handlers: List[Callable[[str], bool]]
@@ -370,7 +370,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         match = RGX_PID_KA.search(line)
         if match:
             self.rem_pid_ka = int(match.group(1))
-            self.li(f"Expected SSHKernelApp RPID={self.rem_pid_ka}")
+            self.li(f"Remote SSHKernelApp expected to run with RPID={self.rem_pid_ka}")
             return True
         return False
 
@@ -462,9 +462,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.le(msg)
             raise RuntimeError(msg)
 
-    async def extract_from_kernel_launch(
-        self, process: subprocess.Popen, cmd: List[str]
-    ):
+    async def extract_from_kernel_launch(self, process: subprocess.Popen):
         """
         Extract the remote process PID, connection file path, etc..
 
@@ -478,9 +476,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         self.rem_ka_size = None  # reset
         self.rem_python_ok = None  # reset
         self.rem_ka_ok = None  # reset
-        self.ld("Waiting for remote connection file path from")
-        cmd_str = " ".join(cmd)
-        self.ld(f"{cmd_str = }")
+        self.ld("Waiting for remote connection file path")
         try:
             future = self.extract_from_process_pipes(
                 process=process,
@@ -1130,7 +1126,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # SSHKernelApp will start the kernel.
         process.stdin.close()
 
-        await self.extract_from_kernel_launch(process=process, cmd=cmd)
+        await self.extract_from_kernel_launch(process=process)
         # We are done with the starting the remote kernel. We know its PID to kill it
         # later. Terminate the local process.
         await self.terminate_popen(process)
