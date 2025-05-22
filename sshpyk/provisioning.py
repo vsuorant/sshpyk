@@ -756,6 +756,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     timeout=self.launch_timeout,
                 )
                 if ok:
+                    # double check that the control socket is opened
+                    await self.has_control_socket(host)
                     break
                 await asyncio.sleep(0.2)
 
