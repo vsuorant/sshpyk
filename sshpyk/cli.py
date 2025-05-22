@@ -10,7 +10,6 @@ from jupyter_client.kernelspec import KernelSpecManager
 
 from .provisioning import RGX_KERNEL_NAME, RGX_SSH_HOST_ALIAS
 from .utils import (
-    DEFAULT_REMOTE_SCRIPT_DIR,
     LAUNCH_TIMEOUT,
     SHUTDOWN_TIME,
     C,
@@ -24,7 +23,6 @@ from .utils import (
     get_local_ssh_configs,
     validate_ssh_config,
     verify_local_ssh,
-    verify_rem_dir_exists,
     verify_rem_executable,
     verify_ssh_connection,
 )
@@ -60,7 +58,6 @@ K_INT = "Interrupt Mode:"
 K_RINT = "Remote Interrupt Mode:"
 K_RRES = "Remote Resource Dir:"
 K_RUNAME = "Remote System:"
-K_RSD = "Remote Script Dir:"
 
 DEFAULT_SSH_CONFIG_PATH = str(Path.home() / ".ssh" / "config")
 
@@ -85,7 +82,6 @@ ALL_KEYS = [
     K_INT,
     K_RINT,
     K_RRES,
-    K_RSD,
 ]
 
 # Global variable for maximum key length
@@ -187,7 +183,6 @@ def extract_ssh_kernel_info(
         "interrupt_mode": interrupt_mode,
         "ssh": config.get("ssh", None),
         "ssh_config": config.get("ssh_config", None),
-        "remote_script_dir": config.get("remote_script_dir", DEFAULT_REMOTE_SCRIPT_DIR),
     }
 
 
@@ -244,8 +239,6 @@ def perform_kernel_checks(kernel: dict, skip_checks: bool, remote_specs_cache: d
         "interrupt_mode_ok": kernel.get("interrupt_mode") == "message",
         "interrupt_mode_remote": None,
         "ssh_configs_val": None,
-        "rsd_ok": None,
-        "script_dir": None,  # as echoed on remote
     }
     ssh_cmds = []
     try:
@@ -302,15 +295,6 @@ def perform_kernel_checks(kernel: dict, skip_checks: bool, remote_specs_cache: d
                 kernel["remote_python"],
             )
             results["exec_ok"] = bool(exec_ok)
-
-            # Check remote script directory exists
-            rsd_ok, rsd_dir = verify_rem_dir_exists(
-                ssh_cmds,
-                kernel["host"],
-                kernel["remote_script_dir"],
-            )
-            results["rsd_ok"] = bool(rsd_ok)
-            results["script_dir"] = rsd_dir
 
             # Check remote kernel exists
             remote_specs = get_remote_kernel_specs(
@@ -387,12 +371,6 @@ def format_ssh_kernel_info(k_lines, kernel, check_res):
             offset = "  "
             k_lines.append(f"{C}{'':<{K_LEN}}{N} {offset} {c} {k}: {msg}")
         host_prefix = " (jump)"
-
-    c = format_check(check_res["rsd_ok"])
-    rsd = kernel["remote_script_dir"]
-    if check_res["script_dir"] and check_res["script_dir"] != rsd:
-        rsd = f"{rsd} ({check_res['script_dir']})"
-    k_lines.append(f"{C}{K_RSD:<{K_LEN}}{N} {c} {rsd}")
 
     c = format_check(check_res["ssh_ok"])
     k_lines.append(f"{C}{K_CONN:<{K_LEN}}{N} {c} {kernel['host']}")
@@ -592,8 +570,6 @@ def edit_kernel(args: argparse.Namespace) -> None:
         config["launch_timeout"] = args.launch_timeout
     if args.shutdown_timeout:
         config["shutdown_timeout"] = args.shutdown_timeout
-    if args.remote_script_dir:
-        config["remote_script_dir"] = args.remote_script_dir
 
     # Write updated kernel.json
     with open(kernel_json_path, "w", encoding="utf-8") as f:
@@ -707,11 +683,6 @@ def main() -> None:
         "after which an equal amount of time will be waited for the kernel to exit.",
     )
     add_parser.add_argument(
-        "--remote-script-dir",
-        help="Path to a remote directory for sshpyk scripts "
-        + f"(default: {DEFAULT_REMOTE_SCRIPT_DIR})",
-    )
-    add_parser.add_argument(
         "--replace",
         action="store_true",
         help="Replace existing kernel with the same name if it exists",
@@ -769,11 +740,6 @@ def main() -> None:
         "If the kernel does not shutdown within this time, "
         "it will be killed forcefully, "
         "after which an equal amount of time will be waited for the kernel to exit.",
-    )
-    edit_parser.add_argument(
-        "--remote-script-dir",
-        help="Path to a remote directory for sshpyk scripts. "
-        "If not specified, the existing value will be kept.",
     )
     edit_parser.add_argument(
         "--ssh",
