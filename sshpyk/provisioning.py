@@ -50,17 +50,17 @@ REMOTE_INFO_LINE = "; ".join(
     )
 )
 PY_CHECK = "SSHPYK_PYTHON_CHECK"
-RGX_PY_CHECK = re.compile(rf"{PY_CHECK}=(\d+)")
+RGX_PY_CHECK = re.compile(rf"^{PY_CHECK}=(\d+)")
 PS_PREFIX = "SSHPYK_PS_OUTPUT_START"
-RGX_PS_PREFIX = re.compile(rf"{PS_PREFIX}=(.+)")
+RGX_PS_PREFIX = re.compile(rf"^{PS_PREFIX}=(.+)")
 CONN_INFO = "SSHPYK_CONNECTION_INFO_JSON"
-RGX_CONN_INFO = re.compile(rf"{CONN_INFO}=(.+)")
+RGX_CONN_INFO = re.compile(rf"^{CONN_INFO}=(.+)")
 RGX_CONN_FP = re.compile(r"\[SSHKernelApp\].*file: (.*\.json)")
 RGX_CONN_CLIENT = re.compile(r"\[SSHKernelApp\].*client: (.*\.json)")
 PID_KA = "SSHPYK_KERNELAPP_PID"
-RGX_PID_KA = re.compile(rf"{PID_KA}=(\d+)")
+RGX_PID_KA = re.compile(rf"^{PID_KA}=(\d+)")
 PID_KERNEL = "SSHPYK_KERNEL_PID"
-RGX_PID_KERNEL = re.compile(rf"{PID_KERNEL}=(\d+)")
+RGX_PID_KERNEL = re.compile(rf"^{PID_KERNEL}=(\d+)")
 # extracted from jupyter_client/kernelspec.py
 RGX_KERNEL_NAME = re.compile(r"^[a-z0-9._-]+$", re.IGNORECASE)
 RGX_SSH_HOST_ALIAS = re.compile(r"^[a-z0-9_-]+$", re.IGNORECASE)

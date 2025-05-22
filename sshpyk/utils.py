@@ -33,9 +33,9 @@ N = "\033[39m"  # Reset color only, not formatting
 LAUNCH_TIMEOUT = 15
 SHUTDOWN_TIME = 15
 UNAME_PREFIX = "UNAME_INFO_RESULT"
-RGX_UNAME_PREFIX = re.compile(rf"{UNAME_PREFIX}=(.+)")
+RGX_UNAME_PREFIX = re.compile(rf"^{UNAME_PREFIX}=(.+)")
 GET_SPECS_PREFIX = "GET_SPECS_RESULT"
-RGX_GET_SPECS_PREFIX = re.compile(rf"{GET_SPECS_PREFIX}=(.+)")
+RGX_GET_SPECS_PREFIX = re.compile(rf"^{GET_SPECS_PREFIX}=(.+)")
 
 SSHPYK_PERSISTENT_FP_BASE = "sshpyk-kernel"
 
