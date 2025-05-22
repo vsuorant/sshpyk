@@ -49,11 +49,6 @@ REMOTE_INFO_LINE = "; ".join(
         ("HOME_OK", '$(if test -d $HOME; then echo "yes"; else echo "no"; fi)'),
     )
 )
-KA_FP = "SSHPYK_KERNELAPP_FP"
-KA_SIZE = "SSHPYK_KERNELAPP_PY_SIZE"
-RGX_EXEC_SIZE = re.compile(rf"{KA_SIZE}=(\s*\d+)")
-KA_CHECK = "SSHPYK_KERNELAPP_CHECK"
-RGX_KA_CHECK = re.compile(rf"{KA_CHECK}=(\d+)")
 PY_CHECK = "SSHPYK_PYTHON_CHECK"
 RGX_PY_CHECK = re.compile(rf"{PY_CHECK}=(\d+)")
 PS_PREFIX = "SSHPYK_PS_OUTPUT_START"
@@ -249,9 +244,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
     ports_cached = False
 
     rem_python_ok = None
-    rem_ka_ok = None
-    rem_ka_expected_size = None
-    rem_ka_size = None
     rem_sys_name = None
 
     rem_conn_fp = None
@@ -328,22 +320,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             uname = match.group(1)
             self.li(f"Remote uname: {uname}")
             self.rem_sys_name = uname.split(None, 1)[0]
-            return True
-        return False
-
-    def extract_rem_ka_ok_handler(self, line: str):
-        match = RGX_KA_CHECK.search(line)
-        if match:
-            self.rem_ka_ok = match.group(1) == "0"
-            self.ld(f"Remote SSHKernelApp status: {self.rem_ka_ok}")
-            return True
-        return False
-
-    def extract_rem_ka_size_handler(self, line: str):
-        match = RGX_EXEC_SIZE.search(line)
-        if match:
-            self.rem_ka_size = int(match.group(1))
-            self.ld(f"Remote SSHKernelApp script size: {self.rem_ka_size}")
             return True
         return False
 
