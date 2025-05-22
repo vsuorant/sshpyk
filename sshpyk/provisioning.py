@@ -21,7 +21,6 @@ from traitlets import Enum as EnumTrait
 
 from .kernelapp import EXISTING, PERSISTENT, PERSISTENT_FILE, SSH_VERBOSE
 from .utils import (
-    DEFAULT_REMOTE_SCRIPT_DIR,
     LAUNCH_TIMEOUT,
     RGX_UNAME_PREFIX,
     SHUTDOWN_TIME,
@@ -227,16 +226,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         "if you are running `sshpyk-kernel` directly and know what you are doing.",
         default_value=True,
     )
-    remote_script_dir = UnicodePath(
-        config=True,
-        help="Path to a remote directory in which a script required to launch the "
-        "remote kernel will be written. If the directory does not exist, it will be "
-        "created. Mind that shell variables are expanded.",
-        allow_none=False,
-        # By default share the .ssh dir since that one is usually already present and
-        # we avoid polluting the remote user's home dir.
-        default_value=DEFAULT_REMOTE_SCRIPT_DIR,
-    )
     existing = Unicode(**EXISTING)  # type: ignore
     persistent = Bool(**PERSISTENT)  # type: ignore
     persistent_file = Unicode(**PERSISTENT_FILE)  # type: ignore
@@ -397,71 +386,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             return True
         return False
 
-    async def extract_from_script_write(
-        self, process: subprocess.Popen, cmd: List[str]
-    ):
-        self.ld("Waiting to write remote script")
-        cmd_str = " ".join(cmd)
-        self.ld(f"{cmd_str = }")
-        # Reset just in case, but it should not be needed, we only write the script once
-        self.rem_ka_ok = None  # reset
-        self.rem_python_ok = None  # reset
-        self.rem_ka_size = None  # reset
-        try:
-            future = self.extract_from_process_pipes(
-                process=process,
-                line_handlers=[
-                    self.extract_rem_python_ok_handler,
-                    self.extract_rem_ka_ok_handler,
-                    self.extract_rem_ka_size_handler,
-                ],
-            )
-            await asyncio.wait_for(future, timeout=self.launch_timeout)
-            rc = process.returncode
-            if rc is not None and rc != 0:
-                cmd = [*self.ssh_base_help, self.ssh_host_alias]  # type: ignore
-                msg = (
-                    f"Failed to write the remote script, process exit code {rc}. "
-                    f"Make sure you can connect manually (w/out any passwords): "
-                    f"'{' '.join(cmd)}'"
-                )
-                self.le(msg)
-                raise RuntimeError(msg)
-        except TimeoutError as e:
-            msg = f"Timed out waiting {self.launch_timeout}s to write the remote script"
-            self.le(msg)
-            raise RuntimeError(msg) from e
-
-        self.check_remote_script_status()
-        self.li("Remote SSHKernelApp script sent")
-
-    def check_remote_script_status(self):
-        if not self.rem_python_ok:
-            p = self.remote_python
-            msg = f"Remote python '{p}' executable not found/readable/executable."
-            self.le(msg)
-            raise RuntimeError(msg)
-        expected_size = self.rem_ka_expected_size
-        if self.rem_ka_size is None:
-            msg = "Could not extract remote SSHKernelApp script size."
-            self.le(msg)
-            raise RuntimeError(msg)
-        elif self.rem_ka_size != expected_size:
-            msg = "Remote SSHKernelApp script has unexpected size "
-            msg += f"{self.rem_ka_size} bytes (vs {expected_size} bytes sent)."
-            self.le(msg)
-            raise RuntimeError(msg)
-
-        if not self.rem_ka_ok:
-            cmd = [*self.ssh_base_help, self.ssh_host_alias]  # type: ignore
-            msg = (
-                "Remote SSHKernelApp script not found/readable/executable. "
-                f"Make sure you can connect (w/out any passwords) '{' '.join(cmd)}' "
-                f"and the remote of {self.remote_script_dir!r} permissions are correct."
-            )
-            self.le(msg)
-            raise RuntimeError(msg)
-
     async def extract_from_kernel_launch(self, process: subprocess.Popen):
         """
         Extract the remote process PID, connection file path, etc..
@@ -483,8 +407,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                 line_handlers=[
                     self.extract_rem_sys_info_handler,
                     self.extract_rem_python_ok_handler,
-                    self.extract_rem_ka_ok_handler,
-                    self.extract_rem_ka_size_handler,
                     self.extract_rem_pid_ka_handler,
                     self.extract_rem_conn_fp_handler,
                     self.extract_rem_ready_handler,
@@ -515,8 +437,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             )
             self.le(msg)
             raise RuntimeError(msg)
-
-        self.check_remote_script_status()
 
         if not self.rem_pid_ka:
             msg = "Could not extract PID of remote process"
@@ -856,57 +776,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             self.le(msg)
             raise RuntimeError(msg)
 
-    def make_remote_script_fp(self):
-        """Make the remote script file path."""
-        return f"{self.remote_script_dir}/sshpyk-kernel-v{KA_VERSION}"
-
-    async def write_remote_script(self):
-        """Write the remote script on the remote machine."""
-        remote_script_fp = self.make_remote_script_fp()
-        self.li(
-            f"Will use {self.remote_python!r} on {self.ssh_host_alias!r} to run "
-            f"{remote_script_fp!r}"
-        )
-        script = f"#!{self.remote_python}\n{KERNELAPP_PY}"
-        self.rem_ka_expected_size = len(script.encode())
-        cmd = [
-            REMOTE_INFO_LINE,
-            # If the python executable is not correct `nohub` gives unrelated errors
-            # like 'nohup: /.../sshpyk-kernel-v666a490b: No such file or directory'
-            f'FP_PY="{self.remote_python}"',
-            'test -e "$FP_PY" && test -r "$FP_PY" && test -x "$FP_PY"',
-            f'echo "{PY_CHECK}=$?"',
-            f'mkdir -p "{self.remote_script_dir}"',
-            f'FP_KA="{remote_script_fp}"',
-            f'echo {KA_FP}="$FP_KA"',
-            'cat > "$FP_KA"',
-            f'{KA_SIZE}=$(cat "$FP_KA" | wc -c | tr -d " ")',
-            f'echo "{KA_SIZE}=${KA_SIZE} (expected {self.rem_ka_expected_size})"',
-            'chmod 755 "$FP_KA"',
-            f'echo "{KA_CHECK}=$?"',
-        ]
-        # not needed since we do it in pre_launch()
-        # await self.check_control_sockets()
-        self.ld(f"Remote command {cmd = }")
-        cmd = [*self.ssh_base, self.ssh_host_alias, "; ".join(cmd)]
-        self.ld(f"Local command {cmd = }")
-        self.ls(cmd=cmd)
-        process = subprocess.Popen(  # noqa: S603
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.PIPE,
-            start_new_session=self.independent_local_processes,
-            bufsize=1,
-            universal_newlines=True,
-        )
-        self.popen_procs[process.pid] = process
-        process.stdin.write(script)
-        process.stdin.flush()
-        process.stdin.close()
-        await self.extract_from_script_write(process=process, cmd=cmd)
-        await self.terminate_popen(process)
-
     async def pre_launch(self, **kwargs: Any) -> Dict[str, Any]:
         """
         Prepare for kernel launch.
@@ -998,26 +867,31 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         return await super().pre_launch(cmd=[], **kwargs)
 
     async def launch_remote_kernel(self):
-        if not self.restart_requested:
-            await self.write_remote_script()
-        remote_script_fp = self.make_remote_script_fp()
         sig_scheme = self.parent.session.signature_scheme  # type: ignore
-        rem_args = [
-            f'"{remote_script_fp}"',
-            f'--SSHKernelApp.kernel_name="{self.remote_kernel_name}"',
-            f'--KernelManager.transport="{self.parent.transport}"',  # type: ignore
-            f'--ConnectionFileMixin.Session.signature_scheme="{sig_scheme}"',
-            # Generating the configuration file on the remote upfront did not work
-            # because the jupyter command on the remote seemed to
-            # override the connection ports and the key in the connection file.
-            # Better to not interfere with the launch of the remote kernel. Let it take
-            # care of everything as configured on the remote system.
-            # f"--KernelManager.connection_file='{self.rem_conn_fp}'",
+
+        km = self.parent  # KernelManager
+        if not km.session.key:  # type: ignore
+            self.lw("Session key not set. Generating a new one.")
+            # ! ensure there is always a key
+            km.session.key = new_id_bytes()  # type: ignore
+        s_key = km.session.key.decode()  # type: ignore
+
+        args_patch = [
+            f"--SSHKernelApp.kernel_name={self.remote_kernel_name}",
+            f"--KernelManager.transport={km.transport}",  # type: ignore
+            f"--ConnectionFileMixin.Session.signature_scheme={sig_scheme}",
+            # Simply specifying the connection file does not work because the
+            # remote jupyter_client code overrides the contents of the connection file.
+            # We preserve on restarts to avoid jupyter errors.
+            # ! If we input the session key directly in plain text, then on
+            # ! the remote machine you can run e.g. `ps aux | grep sshpyk-kernel`
+            # ! and see the key in plain text in the command. We therefore
+            # ! communicate it securely inside the patched SSHKernelApp sent via stdin.
+            f"--ConnectionFileMixin.Session.key={s_key}",
             # Allow users to see the logs of the remote SSHKernelApp when enabling
             # the local `--debug`.
             "--debug",
         ]
-
         # When we restart the kernel use the same connection file and key, otherwise it
         # will be different and there is an unhandled exception in the local jupyter
         # server.
@@ -1029,37 +903,17 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         #     self.connection_file, cfg = write_connection_file(...)
         # While self._connection_file_written has initial value set to `False`.
         if self.restart_requested:
-            # The contents will be overwritten, but at least the same file is used.
-            rem_args.append(f'--KernelManager.connection_file="{self.rem_conn_fp}"')
+            # ! Generating the configuration file on the remote upfront did not work
+            # ! because the jupyter command on the remote seemed to
+            # ! override the connection ports and the key in the connection file.
+            # ! Better to not interfere with the launch of the remote kernel. Let it
+            # ! take care of everything as configured on the remote system.
+            # Only reuse the same remote connection file on restarts.
+            args_patch.append(f'--KernelManager.connection_file="{self.rem_conn_fp}"')
 
-        # In case the remote system does not implement the (non-POSIX) /dev/stdin,
-        # try a few more common options. Ultimately, if needed we can adapt the code of
-        # the (remote) SSHKernelApp to accept the session key explicitly from stdin by
-        # setting some flag.
-        stdin_path = (
-            # Common on modern unix-like systems
-            "if test -e '/dev/stdin'; then echo '/dev/stdin'; "
-            # Linux
-            "elif test -e '/proc/self/fd/0'; then echo '/proc/self/fd/0'; "
-            # macOS / BSD
-            "elif test -e '/dev/fd/0'; then echo '/dev/fd/0'; fi"
-        )
-        # Simply specifying the connection file does not work because the
-        # remote jupyter_client code overrides the contents of the connection file.
-        # Using stdin does the trick of forcing the remote kernel to use the
-        # provided key which we preserve on restarts to avoid jupyter errors.
-        # ! if we input the session key directly here in plain text, then on
-        # ! the remote machine you can run e.g. `ps aux | grep sshpyk-kernel`
-        # ! and see the key in plain text in the command. We therefore
-        # ! communicate it securely using the stdin pipe of the ssh process below.
-        rem_args.append(f"--ConnectionFileMixin.Session.keyfile=$({stdin_path})")
-
-        km = self.parent  # KernelManager
-        if not km.session.key:
-            self.lw("Session key not set. Generating a new one.")
-            km.session.key = new_id_bytes()  # ! ensure there is always a key
-
-        cmd = " ".join(rem_args)
+        # Just a line that can will echoed by the remote script and will show up in the
+        # local logs if the remote script starts running.
+        msg = 'print("[SSHPYK]")'
         # Use `nohup` to ensure the remote kernel is not killed when we detach from the
         # remote machine.
         # `exec` ensures the `cmd` will have the same PID output by `echo $$`.
@@ -1071,16 +925,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             f'FP_PY="{self.remote_python}"',
             'test -e "$FP_PY" && test -r "$FP_PY" && test -x "$FP_PY"',
             f'echo "{PY_CHECK}=$?"',
-            f'FP_KA="{remote_script_fp}"',
-            f'echo {KA_FP}="$FP_KA"',
-            'test -e "$FP_KA" && test -r "$FP_KA" && test -x "$FP_KA"',
-            f'echo "{KA_CHECK}=$?"',
-            f'{KA_SIZE}=$(cat "$FP_KA" | wc -c | tr -d " ")',
-            f'echo "{KA_SIZE}=${KA_SIZE} (expected {self.rem_ka_expected_size})"',  # noqa: E501
             # Print the PID of the remote SSHKernelApp process
             f'echo "{PID_KA}=$$"',
             # Launch the SSHKernelApp
-            f"exec nohup {cmd}",
+            f"exec nohup $FP_PY -c 'import sys; {msg}; exec(sys.stdin.read())'",
         ]
         await self.check_control_sockets()
         cmd = "; ".join(cmd_parts)
@@ -1119,7 +967,10 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         # externally-provided connection files.
         # Communicate the session key to the remote process securely using the stdin
         # pipe of the ssh process.
-        process.stdin.write(km.session.key.decode())
+        # `!r` should suffice to make it valid python code
+        patch_line = f"ARGS_PATCH = {args_patch!r}"
+        self.ld(f"Remote SSHKernelApp args: {' '.join(args_patch)}")
+        process.stdin.write(KERNELAPP_PY.replace("ARGS_PATCH = []", patch_line))
         process.stdin.flush()
         # Close the input pipe, see launch_kernel in jupyter_client
         # When we close the input pipe, the remote process will receive EOF and the

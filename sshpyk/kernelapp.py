@@ -340,7 +340,13 @@ class SSHKernelApp(JupyterApp):
 
 main = SSHKernelApp.launch_instance
 
+# This line is to be patched by the provisioning.py before piping the contents of
+# this kernelapp.py file to the remote machine to launch the remote kernel with the
+# necessary arguments.
+ARGS_PATCH = []
+
 # This is mainly to allow running the SSHKernelApp as a script on the remote machine
 if __name__ == "__main__":
     sys.argv[0] = re.sub(r"(-script\.pyw|\.exe)?$", "", sys.argv[0])
+    sys.argv += ARGS_PATCH  # see ARGS_PATCH comment above
     sys.exit(main())
