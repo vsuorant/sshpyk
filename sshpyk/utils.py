@@ -138,7 +138,7 @@ def get_local_ssh_configs(
             if isinstance(proxy_jump, list):
                 log.warning(
                     f"{lp}SSH reports more than one ProxyJump for {alias!r}: "
-                    "{proxy_jump!r}. This is likely a misconfiguration!"
+                    f"{proxy_jump!r}. This is likely a misconfiguration!"
                 )
                 # ? is this SSH config possible/valid at all?
                 aliases.append(proxy_jump[0])
@@ -164,8 +164,12 @@ def validate_ssh_config(config: Dict[str, Union[str, List[str]]]):
     ]
     for key in tuple(keys):
         if isinstance(config.get(key, None), list):
+            # ! If "IdentityFile" is missing, SSH will use a list of default identity
+            # ! files. Don't make it an "error", otherwise the (last-resort) automated
+            # ! password-based authentications (e.g. using `sshpass` + macOS Keychain)
+            # ! might not be possible.
             out[key] = (
-                "error",
+                "warning" if key == "identityfile" else "error",
                 f"Likely missing in your ssh config. Multiple values: {config[key]}.",
             )
             del keys[keys.index(key)]
