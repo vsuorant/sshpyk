@@ -30,8 +30,10 @@ E = "\033[90m"  # Grey
 W = "\033[33m"  # Orange
 N = "\033[39m"  # Reset color only, not formatting
 
-LAUNCH_TIMEOUT = 15
-SHUTDOWN_TIME = 15
+# Opening server ControlMaster connections the first time can take a long time.
+# Even on my local network this easily took >15s for the first connection.
+LAUNCH_TIMEOUT = 60
+SHUTDOWN_TIME = 60
 UNAME_PREFIX = "UNAME_INFO_RESULT"
 RGX_UNAME_PREFIX = re.compile(rf"^{UNAME_PREFIX}=(.+)")
 GET_SPECS_PREFIX = "GET_SPECS_RESULT"
@@ -45,7 +47,7 @@ def verify_local_ssh(
     log: logging.Logger = logger,
     name: str = "ssh",
     lp: str = "",
-    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
 ) -> str:
     """Verify that the local SSH is working."""
     if not ssh:
@@ -101,7 +103,7 @@ def get_local_ssh_configs(
     alias: str,
     log: logging.Logger = logger,
     lp: str = "",
-    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
 ) -> List[Dict[str, Union[str, List[str]]]]:
     aliases = [alias]
     hosts_configs = []
@@ -288,7 +290,7 @@ def verify_ssh_connection(
     log: logging.Logger = logger,
     lp: str = "",
     start_new_session: bool = False,
-    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
 ):
     """Verify that the SSH connection to the remote host is working."""
     cmd = [*ssh, host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
@@ -356,7 +358,7 @@ def verify_rem_executable(
     fp: str,
     log: logging.Logger = logger,
     lp: str = "",
-    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
 ):
     """Verify that the remote executable exists and is executable."""
     # NB the quotes around filename are mandatory and safer
@@ -387,7 +389,7 @@ def verify_rem_dir_exists(
     dir_path: str,
     log: logging.Logger = logger,
     lp: str = "",
-    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
 ) -> Tuple[bool, str]:
     """Verify that the remote directory exists."""
     # NB the quotes around dir_path are mandatory and safer
@@ -420,7 +422,7 @@ def fetch_remote_kernel_specs(
     python: str,
     log: logging.Logger = logger,
     lp: str = "",
-    timeout: Optional[int] = LAUNCH_TIMEOUT * 2,
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
 ) -> dict:
     """
     Fetch kernel specifications from the remote host using SSH.
