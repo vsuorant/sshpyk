@@ -1051,9 +1051,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         )
         for line in lines:
             log_func(f"[Process {proc.pid}] {line}")
-            if "control socket" in line.lower():
-                log_func = log_func if log_func == self.le else self.lw
-                log_func(f"'ssh -O forward ...' said '{line}'. " + msg_warn)
+            if proc.returncode != 0:
+                self.lw(f"'ssh -O forward ...' said '{line}'. " + msg_warn)
 
         log_func(msg)
 
