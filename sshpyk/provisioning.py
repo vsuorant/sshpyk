@@ -656,14 +656,18 @@ class SSHKernelProvisioner(KernelProvisionerBase):
         for config in configs:
             valid = validate_ssh_config(config)
             host = config["host"]
-            for k, v in valid.items():
-                self.li(f"[Local ssh config for '{host}'] {k}: {v}")
             for k, (v, msg) in valid.items():
                 if v == "error":
+                    self.le(f"[Local ssh config for {host}] {k}: {msg}")
                     raise RuntimeError(
-                        f"Invalid config for ssh host alias {host!r}: ({v}) {k}: {msg} "
+                        f"Invalid config for host alias {host!r}: {k}: {msg} "
                         "Verify your local ssh config (e.g., ~/.ssh/config)."
                     )
+                elif v == "warning":
+                    self.lw(f"[Local ssh config for {host}] {k}: {msg}")
+                else:
+                    # `({v})` will be "ok" or "info"
+                    self.li(f"[Local ssh config for {host}] ({v}) {k}: {msg}")
 
         # Reverse them so that we check the control sockets in the same orders as the
         # connections are established.
