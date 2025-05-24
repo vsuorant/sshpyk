@@ -295,8 +295,7 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     continue
                 self.ld(f"[Process {process.pid}] stdout/stderr: {line}")
                 # When enabling --ssh-verbose=vvv it can mess up the extraction
-                # because sometimes it prints the commands it is executing on the
-                # remote
+                # because sometimes it prints the commands it is executing on the remote
                 if RGX_SSH_LOGS.match(line):
                     continue
                 for i, line_handler in enumerate(line_handlers):
@@ -731,7 +730,6 @@ class SSHKernelProvisioner(KernelProvisionerBase):
                     host_alias=host,
                     log=self.log,
                     lp=self.log_prefix,
-                    verbose=f"-{self.ssh_verbose}" if self.ssh_verbose else None,
                     start_new_session=self.independent_local_processes,
                     timeout=self.launch_timeout,
                 )
@@ -1364,9 +1362,8 @@ class SSHKernelProvisioner(KernelProvisionerBase):
             # Probably this is too much of an edge case, but if not and the remote
             # process actually still exists, we might trigger a kernel restart.
         ]
-        # * Don't log, it is called too often.
-        # // self.ld(f"Checking remote processes state {cmd = }")
-        # // self.ls(cmd=cmd)
+        self.ld(f"Checking remote processes state {cmd = }")
+        self.ls(cmd=cmd)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,

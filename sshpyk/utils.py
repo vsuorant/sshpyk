@@ -1,9 +1,10 @@
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from shutil import which
-from subprocess import PIPE, STDOUT, run
+from subprocess import PIPE, STDOUT, Popen, run
 from typing import Dict, List, Optional, Tuple, Union
 
 from jupyter_client.connect import find_connection_file
@@ -32,8 +33,8 @@ N = "\033[39m"  # Reset color only, not formatting
 
 # Opening server ControlMaster connections the first time can take a long time.
 # Even on my local network this easily took >15s for the first connection.
-LAUNCH_TIMEOUT = 60
-SHUTDOWN_TIME = 60
+LAUNCH_TIMEOUT = 30
+SHUTDOWN_TIME = 30
 UNAME_PREFIX = "UNAME_INFO_RESULT"
 RGX_UNAME_PREFIX = re.compile(rf"^{UNAME_PREFIX}=(.+)")
 GET_SPECS_PREFIX = "GET_SPECS_RESULT"
@@ -66,8 +67,10 @@ def verify_local_ssh(
         stdout=PIPE,
         stderr=STDOUT,  # at least OpenSSH outputs version to stderr
         text=True,
+        universal_newlines=True,
         check=False,
         timeout=timeout,
+        bufsize=1,
     )  # type: ignore
     ok = ret.returncode == 0
     out = ret.stdout.strip()
@@ -118,8 +121,10 @@ def get_local_ssh_configs(
             stdin=PIPE,
             capture_output=True,
             text=True,
+            universal_newlines=True,
             check=False,
             timeout=timeout,
+            bufsize=1,
         )  # type: ignore
         ok = ret.returncode == 0
         if not ok:
@@ -283,24 +288,14 @@ def validate_ssh_config(config: Dict[str, Union[str, List[str]]]):
     return out
 
 
-def verify_ssh_connection(
-    ssh: List[str],
+def verify_ssh_connection_quiet_ssh(
+    cmd: List[str],
     host_alias: str,
-    verbose: Optional[str] = None,
     log: logging.Logger = logger,
     lp: str = "",
     start_new_session: bool = False,
     timeout: Optional[int] = LAUNCH_TIMEOUT,
 ):
-    """Verify that the SSH connection to the remote host is working."""
-    cmd = [*ssh, host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
-    if verbose:
-        cmd.insert(1, verbose)
-    log.debug(f"{E}{lp}{N}Verifying SSH connection to {host_alias!r}")
-    if verbose:
-        log.info(f"{C}{lp}{N}cmd: {' '.join(cmd)}")
-    else:
-        log.debug(f"{C}{lp}{N}cmd: {' '.join(cmd)}")
     uname = ""
     try:
         ret = run(  # noqa: S603
@@ -313,13 +308,13 @@ def verify_ssh_connection(
             start_new_session=start_new_session,
             universal_newlines=True,
             timeout=timeout,
-        )  # type: ignore
+        )
     except Exception as e:
         log.error(f"{R}{lp}{N}SSH connection to {host_alias!r} failed: {e}")
-        return False, uname
+        return -123, uname
+
     stdout = ret.stdout.strip()
     stderr = ret.stderr.strip()
-
     ok = ret.returncode == 0
 
     for line in stderr.splitlines():
@@ -341,10 +336,116 @@ def verify_ssh_connection(
             uname = match.group(1)
             break
 
-    ok = ok and bool(uname)
+    return ret.returncode, uname
+
+
+def verify_ssh_connection_verbose_ssh(
+    cmd: List[str],
+    host_alias: str,
+    log: logging.Logger = logger,
+    lp: str = "",
+    start_new_session: bool = False,
+):
+    """
+    ! SSH does not close its stderr pipe if the ControlMaster does NOT exist yet
+    ! AND a verbose -v/vv/vvv option has been passed to it.
+    ! Irony of a bug while trying to debug...
+    ! If the ControlMaster DOES exist already, then we don't have this issue.
+
+    ! I don't fully understand why this happens, but from some simple python
+    ! scripts that invokes ssh it seems that ssh never closes its stderr pipe
+    ! when it was started with -v/vv/vvv and a control master child process
+    ! was forked to create the control master socket.
+
+    ! OpenSSH seems to have several bugs related to this over the years.
+    ! https://bugzilla.mindrot.org/show_bug.cgi?id=1988 (seem resolved)
+    ! https://bugzilla.mindrot.org/show_bug.cgi?id=3046 (no answers, fits our case)
+    ! As of 'OpenSSH_9.9p2, OpenSSL 3.4.1 11 Feb 2025' the issue is still there, at
+    ! least on macOS using `openssh` from Homebrew.
+
+    ! In any case, since people are likely to use oldish versions of OpenSSH,
+    ! we need to handle this to the best of our ability.
+    """
+    uname = ""
+    try:
+        proc = Popen(  # noqa: S603
+            cmd,
+            stdout=PIPE,
+            # Merge the pipes so that we have a criteria to break from the loop despite
+            # the pipe never being closed by the ssh process.
+            stderr=STDOUT,
+            stdin=PIPE,
+            text=True,
+            universal_newlines=True,
+            start_new_session=start_new_session,
+            bufsize=1,
+        )
+        # We don't have anything to send to the process
+        proc.stdin.close()  # type: ignore
+    except Exception as e:
+        log.error(f"{R}{lp}{N}SSH connection to {host_alias!r} failed: {e}")
+        return -123, uname
+
+    # ! REMINDER: when verbose=True, and a control socket was created as part of the ssh
+    # ! command, then ssh won't close its stderr pipe (here piped into stdout).
+    # ! We wait for our target line and then break and close pipes ourselves.
+    # ! Note that `for line in proc.stdout` blocks if the stderr/stdout pipe is never
+    # ! closed. This is not ideal but acceptable since this functions is intended to
+    # ! run only when performing some kind of debugging with verbose ssh, so the user
+    # ! should be able to detect if it hangs and kill the process(es) themselves.
+    for line in proc.stdout:  # type: ignore
+        line = line.strip()
+        if not line:
+            continue
+        log.debug(f"{E}{lp}{N}[{host_alias} stdout/stderr] {line}")
+        match = RGX_UNAME_PREFIX.search(line)
+        if match:
+            uname = match.group(1)
+            break
+
+    proc.stdout.close()  # type: ignore
+
+    # Simple cleanup retries
+    for _ in range(20):
+        proc.terminate()
+        if proc.poll() is not None:
+            break
+        time.sleep(0.1)
+    if proc.poll() is None:
+        proc.kill()  # if still alive force-kill
+    proc.wait()
+    return proc.returncode, uname
+
+
+def verify_ssh_connection(
+    ssh: List[str],
+    host_alias: str,
+    log: logging.Logger = logger,
+    lp: str = "",
+    start_new_session: bool = False,
+    timeout: Optional[int] = LAUNCH_TIMEOUT,
+):
+    """Verify that the SSH connection to the remote host is working."""
+    verbose = any(v in ssh for v in ("-v", "-vv", "-vvv"))
+    cmd = [*ssh, host_alias, f'echo "{UNAME_PREFIX}=$(uname -a)"']
+    log.debug(f"{E}{lp}{N}Verifying SSH connection to {host_alias!r}")
+    if verbose:
+        log.info(f"{C}{lp}{N}cmd: {' '.join(cmd)}")
+    else:
+        log.debug(f"{C}{lp}{N}cmd: {' '.join(cmd)}")
+
+    if verbose:
+        returncode, uname = verify_ssh_connection_verbose_ssh(
+            cmd, host_alias, log, lp, start_new_session
+        )
+    else:
+        returncode, uname = verify_ssh_connection_quiet_ssh(
+            cmd, host_alias, log, lp, start_new_session, timeout=timeout
+        )
+    ok = returncode == 0 and bool(uname)
     if not ok:
         msg = f"{R}{lp}{N}SSH connection to {host_alias!r} failed "
-        msg += f"(exit code={ret.returncode})."
+        msg += f"(exit code={returncode})."
         log.error(msg)
     else:
         msg = f"{E}{lp}{N}SSH connection to {host_alias!r} succeeded: {uname = !r}."
@@ -369,8 +470,10 @@ def verify_rem_executable(
         stdin=PIPE,
         capture_output=True,
         text=True,
+        universal_newlines=True,
         check=False,
         timeout=timeout,
+        bufsize=1,
     )  # type: ignore
     ok = ret.returncode == 0
     if not ok:
@@ -402,8 +505,10 @@ def verify_rem_dir_exists(
         stdin=PIPE,
         capture_output=True,
         text=True,
+        universal_newlines=True,
         check=False,
         timeout=timeout,
+        bufsize=1,
     )  # type: ignore
     ok = ret.returncode == 0
     if not ok:
@@ -440,8 +545,10 @@ def fetch_remote_kernel_specs(
         stdin=PIPE,
         capture_output=True,
         text=True,
+        universal_newlines=True,
         check=False,
         timeout=timeout,
+        bufsize=1,
     )  # type: ignore
     if ret.returncode != 0:
         msg = f"{lp}Failed to fetch remote kernel specs: {ret.stderr.strip()!r}"
