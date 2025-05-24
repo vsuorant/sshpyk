@@ -25,9 +25,14 @@ Table of Contents
   * `Recommended SSH Config`_
   * `Authentication via Private/Public Key`_
 
+    + `Common Reasons for Private Key Authentication Failure`_
     + `Alternatives to Private/Public Key Authentication`_
 
   * `Authentication via Password`_
+
+    + `Persistent Authenticated Control Socket`_
+    + `A Note on Automated Password Input as Last Resort`_
+
   * `Using Bastion/Jump Hosts`_
 
 - `Launching Remote Kernels from Command Line`_
@@ -508,43 +513,48 @@ Common Reasons for Private Key Authentication Failure
 If you're having trouble connecting even after setting up SSH keys, here are some common culprits:
 
 1. **Incorrect Permissions on the Remote Server:**
-  *  Your home directory (e.g., `/home/username`) on the server should not be writable by others (`chmod 755` or `drwxr-xr-x` is typical).
 
-  *  The ``~/.ssh`` directory on the server must have strict permissions, typically `700` (``drwx------``). Use ``chmod 700 ~/.ssh``.
+*  Your home directory (e.g., `/home/username`) on the server should not be writable by others (`chmod 755` or `drwxr-xr-x` is typical).
 
-  *  The ``~/.ssh/authorized_keys`` file on the server must also have strict permissions, typically `600` (``-rw-------``). Use ``chmod 600 ~/.ssh/authorized_keys``.
+*  The ``~/.ssh`` directory on the server must have strict permissions, typically `700` (``drwx------``). Use ``chmod 700 ~/.ssh``.
+
+*  The ``~/.ssh/authorized_keys`` file on the server must also have strict permissions, typically `600` (``-rw-------``). Use ``chmod 600 ~/.ssh/authorized_keys``.
 
 2. **Public Key Issues:**
-  *  The public key content in ``~/.ssh/authorized_keys`` on the server does not exactly match the corresponding private key, or it's the wrong public key.
 
-  *  The public key in ``authorized_keys`` is malformed (e.g., incomplete copy, extra line breaks, missing parts). Ensure it's a single, unbroken line of text, usually starting with ``ssh-rsa``, ``ssh-ed25519``, etc.
+*  The public key content in ``~/.ssh/authorized_keys`` on the server does not exactly match the corresponding private key, or it's the wrong public key.
 
-  *  Multiple public keys in ``authorized_keys`` should each be on a new line.
+*  The public key in ``authorized_keys`` is malformed (e.g., incomplete copy, extra line breaks, missing parts). Ensure it's a single, unbroken line of text, usually starting with ``ssh-rsa``, ``ssh-ed25519``, etc.
+
+*  Multiple public keys in ``authorized_keys`` should each be on a new line.
 
 3. **Client-Side Private Key & Configuration Issues:**
-  *  The ``IdentityFile`` directive in your local ``~/.ssh/config`` points to the wrong private key file, a non-existent file, or the public key file instead of the private key.
 
-  *  The private key file on your local machine has incorrect permissions. It should typically be `600` (``-rw-------``) or `400` (``-r--------``). Use ``chmod 600 /path/to/your/private_key``.
+*  The ``IdentityFile`` directive in your local ``~/.ssh/config`` points to the wrong private key file, a non-existent file, or the public key file instead of the private key.
 
-  *  If your private key is protected by a passphrase, an SSH agent (like ``ssh-agent``) must be running and have the key added (``ssh-add /path/to/your/private_key``), especially if ``BatchMode yes`` is used in your SSH config, as this prevents interactive passphrase prompts (as intended but can be a source of confusion).
+*  The private key file on your local machine has incorrect permissions. It should typically be `600` (``-rw-------``) or `400` (``-r--------``). Use ``chmod 600 /path/to/your/private_key``.
 
-4. **SSH Server Configuration (``sshd_config`` on the Remote Server):**
-  *  ``PubkeyAuthentication`` might be set to ``no`` in the server's ``/etc/ssh/sshd_config`` file. It should be ``yes``. Check with your remote system's administrator.
+*  If your private key is protected by a passphrase, an SSH agent (like ``ssh-agent``) must be running and have the key added (``ssh-add /path/to/your/private_key``), especially if ``BatchMode yes`` is used in your SSH config, as this prevents interactive passphrase prompts (as intended but can be a source of confusion).
 
-  *  The ``AuthorizedKeysFile`` directive in ``sshd_config`` might point to a non-standard location for the authorized keys file (e.g., ``.ssh/authorized_keys2``). Ensure your public key is in the correct file. Check with your remote system's administrator.
+4. **SSH Server Configuration (sshd_config on the Remote Server):**
 
-  *  User-specific restrictions like ``AllowUsers``, ``DenyUsers``, ``AllowGroups``, or ``DenyGroups`` in ``sshd_config`` might be preventing your user from logging in. Check with your remote system's administrator.
+*  ``PubkeyAuthentication`` might be set to ``no`` in the server's ``/etc/ssh/sshd_config`` file. It should be ``yes``. Check with your remote system's administrator.
 
-  *  The SSH daemon (``sshd``) on the server might need to be reloaded or restarted after changes to ``sshd_config``. Your remote system's administrator should know how to do this.
+*  The ``AuthorizedKeysFile`` directive in ``sshd_config`` might point to a non-standard location for the authorized keys file (e.g., ``.ssh/authorized_keys2``). Ensure your public key is in the correct file. Check with your remote system's administrator.
+
+*  User-specific restrictions like ``AllowUsers``, ``DenyUsers``, ``AllowGroups``, or ``DenyGroups`` in ``sshd_config`` might be preventing your user from logging in. Check with your remote system's administrator.
+
+*  The SSH daemon (``sshd``) on the server might need to be reloaded or restarted after changes to ``sshd_config``. Your remote system's administrator should know how to do this.
 
 5. **SSH Agent Issues on the Client:**
-  *  The ``ssh-agent`` is not running on your local machine.
 
-  *  The correct private key has not been added to the ``ssh-agent`` (use ``ssh-add -l`` to list added keys, and ``ssh-add /path/to/private_key`` to add one). This applies mainly to passphrase-protected keys.
+*  The ``ssh-agent`` is not running on your local machine.
 
-  *  Too many keys have been offered to the server (especially if you have many keys in your agent or specified via ``IdentityFile``), and the server has given up before trying the correct one. You can use ``IdentitiesOnly yes`` in your ``~/.ssh/config`` for the specific host to ensure only the specified ``IdentityFile`` is used.
+*  The correct private key has not been added to the ``ssh-agent`` (use ``ssh-add -l`` to list added keys, and ``ssh-add /path/to/private_key`` to add one). This applies mainly to passphrase-protected keys.
 
-When debugging, use verbose output from the SSH client (e.g., ``ssh -vvv remote_server_sshpyk``) to get detailed information about the connection attempt, including which keys are being offered and where the authentication process might be failing.
+*  Too many keys have been offered to the server (especially if you have many keys in your agent or specified via ``IdentityFile``), and the server has given up before trying the correct one. You can use ``IdentitiesOnly yes`` in your ``~/.ssh/config`` for the specific host to ensure only the specified ``IdentityFile`` is used.
+
+* When debugging, use verbose output from the SSH client (e.g., ``ssh -vvv remote_server_sshpyk``) to get detailed information about the connection attempt, including which keys are being offered and where the authentication process might be failing.
 
 Alternatives to Private/Public Key Authentication
 -------------------------------------------------
@@ -558,6 +568,9 @@ you can still use ``sshpyk`` by either:
 
 Authentication via Password
 ===========================
+
+Persistent Authenticated Control Socket
+---------------------------------------
 
 If your remote host doesn't allow private/public key-based authentication and insists
 on password authentication, you can still use ``sshpyk`` by manually establishing a
@@ -604,18 +617,23 @@ master SSH connection before attempting to start any ``sshpyk`` kernels:
 The ``ControlMaster`` connection will remain active for the duration specified in ``ControlPersist``,
 allowing ``sshpyk`` to use it seamlessly despite the password requirement.
 
-A Note on Automated Password Input (Last Resort)
-------------------------------------------------
+A Note on Automated Password Input as Last Resort
+-------------------------------------------------
 
 In rare situations where the remote server **only** supports password authentication and you have not other alternative but to automate the password authentication in order to be able to use ``sshpyk``. This is **highly discouraged** due to significant security risks.
 
 If you find yourself in this situation, the ``dangerous`` directory within the ``sshpyk`` repository contains an example script (``ssh-sshpass-wrapper``) and a sample SSH config. This script demonstrates using ``sshpass`` to automate the password input to login into a Bastion host. Under the hood, from that Bastion host a final ssh jump to the target remote server is made using the ``ProxyJump`` feature of SSH. The authentication to the target remote server is done using a normal private key.
 
 **Proceed with extreme caution and diligence:**
+
 * Understand the security implications of storing and handling passwords programmatically.
+
 * This approach is less secure than key-based authentication because ``ssh`` won't be enforcing file permissions, etc., on the custom ``ssh-sshpass-wrapper`` script.
+
 * The example script and configuration are provided as a proof-of-concept and require modifications for your specific environment, etc.
+
 * Make sure you exhausted all the possible reasons why the key-based authentication is not working. You can find some common reasons in `Common Reasons for Private Key Authentication Failure`_.
+
 * Consult the ``dangerous/README.md`` file for more details before attempting this method.
 
 Using Bastion/Jump Hosts
