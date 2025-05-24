@@ -120,7 +120,7 @@ See `Recommended SSH Config`_ for more details.
 
 .. code-block:: bash
 
-  ssh -o BatchMode=no remote_server_sshpyk
+  ssh -o BatchMode=no remote_server_sshpyk "echo CONNECTED"
 
 See `Authentication via Private/Public Key`_ for setting up SSH keys.
 If you are sure that the remote ``sshd`` does not allow authentication via private/public key see `Authentication via Password`_.
@@ -468,17 +468,24 @@ To set up SSH key-based authentication:
 
 .. code-block:: bash
 
+  # Don't set a passphrase for the key when prompted.
   ssh-keygen -t ed25519 -f ~/.ssh/private_key_for_remote_server -C "some comment for your own reference"
 
-2. Copy your public key to the remote server:
+2. Check your private key is accessible without a passphrase:
 
 .. code-block:: bash
 
-  ssh-copy-id remote_username@some.remote.server.com
+  ssh-keygen -y -f ~/.ssh/private_key_for_remote_server
 
-Or manually add the contents of ``~/.ssh/private_key_for_remote_server.pub`` from your local machine to ``~/.ssh/authorized_keys`` on the remote machine.
+3. Copy your public key to the remote server:
 
-3. Add the key to your SSH config (edit to match your own setup):
+.. code-block:: bash
+
+  ssh-copy-id -o BatchMode=no remote_username@some.remote.server.com
+
+Or manually add the contents of ``~/.ssh/private_key_for_remote_server.pub`` from your local machine to the ``authorized_keys`` file on the remote machine. Typically ``~/.ssh/authorized_keys``, but please consult your remote system's administrator for the correct location/procedure.
+
+4. Add the key to your SSH config (edit to match your own setup):
 
 .. code-block:: bash
 
@@ -489,11 +496,55 @@ Or manually add the contents of ``~/.ssh/private_key_for_remote_server.pub`` fro
     BatchMode yes
     # ... the rest of the config as described in `Recommended SSH Config`
 
-4. Test your connection, you should connect without being prompted for a password:
+5. Test your connection, you should connect without being prompted for a password:
 
 .. code-block:: bash
 
   ssh -o BatchMode=no remote_server_sshpyk "echo CONNECTED"
+
+Common Reasons for Private Key Authentication Failure
+-----------------------------------------------------
+
+If you're having trouble connecting even after setting up SSH keys, here are some common culprits:
+
+1. **Incorrect Permissions on the Remote Server:**
+  *  Your home directory (e.g., `/home/username`) on the server should not be writable by others (`chmod 755` or `drwxr-xr-x` is typical).
+
+  *  The ``~/.ssh`` directory on the server must have strict permissions, typically `700` (``drwx------``). Use ``chmod 700 ~/.ssh``.
+
+  *  The ``~/.ssh/authorized_keys`` file on the server must also have strict permissions, typically `600` (``-rw-------``). Use ``chmod 600 ~/.ssh/authorized_keys``.
+
+2. **Public Key Issues:**
+  *  The public key content in ``~/.ssh/authorized_keys`` on the server does not exactly match the corresponding private key, or it's the wrong public key.
+
+  *  The public key in ``authorized_keys`` is malformed (e.g., incomplete copy, extra line breaks, missing parts). Ensure it's a single, unbroken line of text, usually starting with ``ssh-rsa``, ``ssh-ed25519``, etc.
+
+  *  Multiple public keys in ``authorized_keys`` should each be on a new line.
+
+3. **Client-Side Private Key & Configuration Issues:**
+  *  The ``IdentityFile`` directive in your local ``~/.ssh/config`` points to the wrong private key file, a non-existent file, or the public key file instead of the private key.
+
+  *  The private key file on your local machine has incorrect permissions. It should typically be `600` (``-rw-------``) or `400` (``-r--------``). Use ``chmod 600 /path/to/your/private_key``.
+
+  *  If your private key is protected by a passphrase, an SSH agent (like ``ssh-agent``) must be running and have the key added (``ssh-add /path/to/your/private_key``), especially if ``BatchMode yes`` is used in your SSH config, as this prevents interactive passphrase prompts (as intended but can be a source of confusion).
+
+4. **SSH Server Configuration (``sshd_config`` on the Remote Server):**
+  *  ``PubkeyAuthentication`` might be set to ``no`` in the server's ``/etc/ssh/sshd_config`` file. It should be ``yes``. Check with your remote system's administrator.
+
+  *  The ``AuthorizedKeysFile`` directive in ``sshd_config`` might point to a non-standard location for the authorized keys file (e.g., ``.ssh/authorized_keys2``). Ensure your public key is in the correct file. Check with your remote system's administrator.
+
+  *  User-specific restrictions like ``AllowUsers``, ``DenyUsers``, ``AllowGroups``, or ``DenyGroups`` in ``sshd_config`` might be preventing your user from logging in. Check with your remote system's administrator.
+
+  *  The SSH daemon (``sshd``) on the server might need to be reloaded or restarted after changes to ``sshd_config``. Your remote system's administrator should know how to do this.
+
+5. **SSH Agent Issues on the Client:**
+  *  The ``ssh-agent`` is not running on your local machine.
+
+  *  The correct private key has not been added to the ``ssh-agent`` (use ``ssh-add -l`` to list added keys, and ``ssh-add /path/to/private_key`` to add one). This applies mainly to passphrase-protected keys.
+
+  *  Too many keys have been offered to the server (especially if you have many keys in your agent or specified via ``IdentityFile``), and the server has given up before trying the correct one. You can use ``IdentitiesOnly yes`` in your ``~/.ssh/config`` for the specific host to ensure only the specified ``IdentityFile`` is used.
+
+When debugging, use verbose output from the SSH client (e.g., ``ssh -vvv remote_server_sshpyk``) to get detailed information about the connection attempt, including which keys are being offered and where the authentication process might be failing.
 
 Alternatives to Private/Public Key Authentication
 -------------------------------------------------
@@ -540,7 +591,7 @@ master SSH connection before attempting to start any ``sshpyk`` kernels:
 
 ⚠️ Warning
   When using password authentication, if the master connection process dies,
-  which happens if you disconnect from internet for a bit,
+  which happens if you disconnect from internet for a bit (e.g. unstable WiFi),
   you need to manually run ``ssh -M -f -N sshpyk_password_server`` again to input your password.
   Afterwards the connection to the remote kernel should be smoothly reestablished.
 
@@ -552,6 +603,20 @@ master SSH connection before attempting to start any ``sshpyk`` kernels:
 
 The ``ControlMaster`` connection will remain active for the duration specified in ``ControlPersist``,
 allowing ``sshpyk`` to use it seamlessly despite the password requirement.
+
+A Note on Automated Password Input (Last Resort)
+------------------------------------------------
+
+In rare situations where the remote server **only** supports password authentication and you have not other alternative but to automate the password authentication in order to be able to use ``sshpyk``. This is **highly discouraged** due to significant security risks.
+
+If you find yourself in this situation, the ``dangerous`` directory within the ``sshpyk`` repository contains an example script (``ssh-sshpass-wrapper``) and a sample SSH config. This script demonstrates using ``sshpass`` to automate the password input to login into a Bastion host. Under the hood, from that Bastion host a final ssh jump to the target remote server is made using the ``ProxyJump`` feature of SSH. The authentication to the target remote server is done using a normal private key.
+
+**Proceed with extreme caution and diligence:**
+* Understand the security implications of storing and handling passwords programmatically.
+* This approach is less secure than key-based authentication because ``ssh`` won't be enforcing file permissions, etc., on the custom ``ssh-sshpass-wrapper`` script.
+* The example script and configuration are provided as a proof-of-concept and require modifications for your specific environment, etc.
+* Make sure you exhausted all the possible reasons why the key-based authentication is not working. You can find some common reasons in `Common Reasons for Private Key Authentication Failure`_.
+* Consult the ``dangerous/README.md`` file for more details before attempting this method.
 
 Using Bastion/Jump Hosts
 ========================
@@ -652,7 +717,7 @@ You can interact with the kernel using e.g. ``jupyter-console`` (a jupyter clien
 
 💡 Tip
   You can press ``Ctrl+D`` in the ``jupyter-console`` to leave the application without shutting down the kernel.
-  Calling ``exit()``/``quit()`` in the ``ipython`` shell or a in notebook will still shutdown the kernel.
+  Calling ``exit()``/``quit()`` in the ``ipython`` shell or a notebook will still shutdown the kernel.
   This is expected behavior. The remote ``SSHKernelApp`` python script will detect this and shutdown itself.
 
 Interactive Controls
