@@ -26,6 +26,8 @@ if echo "$ssh_config" | grep -qi "HostName $jump_hostname" || echo "$ssh_config"
     export SSHPASS=$(security find-generic-password -a "$jump_alias" -w)
     # Run a dummy command that will create the control socket (if needed).
     # This assumes that ControlMaster is set to auto in the ssh_config_file.
+    # ! WARNING: do NOT send this command to the background, it will most likely fail
+    # ! to create the control socket.
     $SSH_EXECUTABLE -F $ssh_config_file -O check $jump_alias >/dev/null 2>&1
     if [ $? -ne 0 ]; then
         echo "[SSH WRAPPER] Control socket does not exist, running dummy command to create it"
