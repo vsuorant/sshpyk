@@ -15,4 +15,10 @@ Host sshpyk_host
 Host *
     ControlMaster auto
     ControlPath ~/.ssh/sshpyk_%r@%h_%p
-    ControlPersist 3m
+    ControlPersist 10m
+    StrictHostKeyChecking no
+    ServerAliveInterval 5
+    ServerAliveCountMax 120000
+    TCPKeepAlive yes
+    ConnectionAttempts 1
+    ConnectTimeout 5
