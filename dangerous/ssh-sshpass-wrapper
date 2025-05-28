@@ -18,7 +18,7 @@ ssh_config=$($SSH_EXECUTABLE -G "$@")
 # Both the Bastion and the target end host might require the password of the Bastion.
 # So you need to check for both the "HostName" and the "ProxyJump" keys.
 if echo "$ssh_config" | grep -qi "HostName $jump_hostname" || echo "$ssh_config" | grep -qi "ProxyJump $jump_alias"; then
-    echo "[SSH WRAPPER] This connection might requires a password"
+    echo "[SSH WRAPPER] This connection might require a password"
     # This example uses macOS's `security` command to read the password from the keychain.
     # `SSHPASS` is the default environment variable used by `sshpass`.
     # ! DO NOT PUT YOUR PASSWORD HERE IN PLAIN TEXT!
